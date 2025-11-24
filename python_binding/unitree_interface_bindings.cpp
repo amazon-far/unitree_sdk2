@@ -39,6 +39,7 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def(py::init<int>())
         .def_readwrite("q", &PyMotorState::q)
         .def_readwrite("dq", &PyMotorState::dq)
+        .def_readwrite("ddq", &PyMotorState::ddq)
         .def_readwrite("tau_est", &PyMotorState::tau_est)
         .def_readwrite("temperature", &PyMotorState::temperature)
         .def_readwrite("voltage", &PyMotorState::voltage);
@@ -63,6 +64,7 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def(py::init<int>())
         .def_readwrite("imu", &PyLowState::imu)
         .def_readwrite("motor", &PyLowState::motor)
+        .def_readwrite("tick", &PyLowState::tick)
         .def_readwrite("mode_machine", &PyLowState::mode_machine);
     
     py::class_<RobotConfig>(m, "RobotConfig")
@@ -85,6 +87,15 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def("write_low_command", static_cast<void(UnitreeInterface::*)(const PyMotorCommand&)>(&UnitreeInterface::WriteLowCommand))
         .def("set_control_mode", &UnitreeInterface::SetControlMode)
         .def("get_control_mode", &UnitreeInterface::GetControlMode)
+        
+        .def("publish_low_state", &UnitreeInterface::PublishLowState,
+             py::arg("state"),
+             "Publish low state for simulation bridge")
+        .def("read_incoming_command", &UnitreeInterface::ReadIncomingCommand,
+             "Read incoming motor command from control system (for simulation)")
+        .def("publish_wireless_controller", &UnitreeInterface::PublishWirelessController,
+             py::arg("controller"),
+             "Publish wireless controller state (for simulation)")
         
         // Utility methods
         .def("create_zero_command", &UnitreeInterface::CreateZeroCommand)

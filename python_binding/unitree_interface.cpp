@@ -135,6 +135,14 @@ void UnitreeInterface::InitializeDDS(const std::string& networkInterface) {
         auto hg_publisher = std::static_pointer_cast<ChannelPublisher<unitree_hg::msg::dds_::LowCmd_>>(lowcmd_publisher_);
         hg_publisher->InitChannel();
         
+        lowstate_publisher_ = std::make_shared<ChannelPublisher<unitree_hg::msg::dds_::LowState_>>(HG_STATE_TOPIC);
+        auto hg_state_pub = std::static_pointer_cast<ChannelPublisher<unitree_hg::msg::dds_::LowState_>>(lowstate_publisher_);
+        hg_state_pub->InitChannel();
+        
+        lowcmd_subscriber_sim_ = std::make_shared<ChannelSubscriber<unitree_hg::msg::dds_::LowCmd_>>(HG_CMD_TOPIC);
+        auto hg_cmd_sub = std::static_pointer_cast<ChannelSubscriber<unitree_hg::msg::dds_::LowCmd_>>(lowcmd_subscriber_sim_);
+        hg_cmd_sub->InitChannel(std::bind(&UnitreeInterface::IncomingLowCmdHandler, this, std::placeholders::_1), 1);
+        
     } else {
         // GO2 message type
         lowstate_subscriber_ = std::make_shared<ChannelSubscriber<unitree_go::msg::dds_::LowState_>>(GO2_STATE_TOPIC);
@@ -145,12 +153,24 @@ void UnitreeInterface::InitializeDDS(const std::string& networkInterface) {
         
         auto go2_publisher = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::LowCmd_>>(lowcmd_publisher_);
         go2_publisher->InitChannel();
+        
+        lowstate_publisher_ = std::make_shared<ChannelPublisher<unitree_go::msg::dds_::LowState_>>(GO2_STATE_TOPIC);
+        auto go2_state_pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::LowState_>>(lowstate_publisher_);
+        go2_state_pub->InitChannel();
+        
+        lowcmd_subscriber_sim_ = std::make_shared<ChannelSubscriber<unitree_go::msg::dds_::LowCmd_>>(GO2_CMD_TOPIC);
+        auto go2_cmd_sub = std::static_pointer_cast<ChannelSubscriber<unitree_go::msg::dds_::LowCmd_>>(lowcmd_subscriber_sim_);
+        go2_cmd_sub->InitChannel(std::bind(&UnitreeInterface::IncomingLowCmdHandler, this, std::placeholders::_1), 1);
     }
     
     // Wireless controller subscriber (same for both message types)
     wireless_subscriber_ = std::make_shared<ChannelSubscriber<unitree_go::msg::dds_::WirelessController_>>(TOPIC_JOYSTICK);
     auto wireless_sub = std::static_pointer_cast<ChannelSubscriber<unitree_go::msg::dds_::WirelessController_>>(wireless_subscriber_);
     wireless_sub->InitChannel(std::bind(&UnitreeInterface::WirelessControllerHandler, this, std::placeholders::_1), 1);
+    
+    wireless_publisher_ = std::make_shared<ChannelPublisher<unitree_go::msg::dds_::WirelessController_>>(TOPIC_JOYSTICK);
+    auto wireless_pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::WirelessController_>>(wireless_publisher_);
+    wireless_pub->InitChannel();
     
     // Create command writer thread
     command_writer_ptr_ = CreateRecurrentThreadEx(
@@ -388,6 +408,151 @@ std::vector<float> UnitreeInterface::GetDefaultKp() const {
 
 std::vector<float> UnitreeInterface::GetDefaultKd() const {
     return default_kd_;
+}
+
+// Simulation bridge methods
+
+void UnitreeInterface::IncomingLowCmdHandler(const void *message) {
+    if (config_.message_type == MessageType::HG) {
+        unitree_hg::msg::dds_::LowCmd_ low_cmd = *(const unitree_hg::msg::dds_::LowCmd_ *)message;
+        
+        // CRC check
+        if (low_cmd.crc() != Crc32Core((uint32_t *)&low_cmd, (sizeof(low_cmd) >> 2) - 1)) {
+            std::cout << "[ERROR] incoming low_cmd CRC Error (HG)" << std::endl;
+            return;
+        }
+        
+        // Convert to internal MotorCommand
+        MotorCommand cmd(config_.num_motors);
+        for (int i = 0; i < config_.num_motors; i++) {
+            cmd.q_target[i] = low_cmd.motor_cmd().at(i).q();
+            cmd.dq_target[i] = low_cmd.motor_cmd().at(i).dq();
+            cmd.kp[i] = low_cmd.motor_cmd().at(i).kp();
+            cmd.kd[i] = low_cmd.motor_cmd().at(i).kd();
+            cmd.tau_ff[i] = low_cmd.motor_cmd().at(i).tau();
+        }
+        
+        // Store in thread-safe buffer
+        incoming_command_buffer_.SetData(cmd);
+        
+    } else {
+        // GO2 message type
+        unitree_go::msg::dds_::LowCmd_ low_cmd = *(const unitree_go::msg::dds_::LowCmd_ *)message;
+        
+        // CRC check
+        if (low_cmd.crc() != Crc32Core((uint32_t *)&low_cmd, (sizeof(low_cmd) >> 2) - 1)) {
+            std::cout << "[ERROR] incoming low_cmd CRC Error (GO2)" << std::endl;
+            return;
+        }
+        
+        // Convert to internal MotorCommand
+        MotorCommand cmd(config_.num_motors);
+        for (int i = 0; i < config_.num_motors; i++) {
+            cmd.q_target[i] = low_cmd.motor_cmd().at(i).q();
+            cmd.dq_target[i] = low_cmd.motor_cmd().at(i).dq();
+            cmd.kp[i] = low_cmd.motor_cmd().at(i).kp();
+            cmd.kd[i] = low_cmd.motor_cmd().at(i).kd();
+            cmd.tau_ff[i] = low_cmd.motor_cmd().at(i).tau();
+        }
+        
+        // Store in thread-safe buffer
+        incoming_command_buffer_.SetData(cmd);
+    }
+}
+
+PyMotorCommand UnitreeInterface::ReadIncomingCommand() {
+    const std::shared_ptr<const MotorCommand> cmd = incoming_command_buffer_.GetData();
+    
+    PyMotorCommand py_cmd(config_.num_motors);
+    if (cmd) {
+        py_cmd.q_target = cmd->q_target;
+        py_cmd.dq_target = cmd->dq_target;
+        py_cmd.kp = cmd->kp;
+        py_cmd.kd = cmd->kd;
+        py_cmd.tau_ff = cmd->tau_ff;
+    } else {
+        // Return zero-initialized command if none available
+        std::fill(py_cmd.q_target.begin(), py_cmd.q_target.end(), 0.0f);
+        std::fill(py_cmd.dq_target.begin(), py_cmd.dq_target.end(), 0.0f);
+        std::fill(py_cmd.kp.begin(), py_cmd.kp.end(), 0.0f);
+        std::fill(py_cmd.kd.begin(), py_cmd.kd.end(), 0.0f);
+        std::fill(py_cmd.tau_ff.begin(), py_cmd.tau_ff.end(), 0.0f);
+    }
+    
+    return py_cmd;
+}
+
+void UnitreeInterface::PublishWirelessController(const PyWirelessController& controller) {
+    unitree_go::msg::dds_::WirelessController_ dds_controller;
+    
+    dds_controller.lx(controller.lx);
+    dds_controller.ly(controller.ly);
+    dds_controller.rx(controller.rx);
+    dds_controller.ry(controller.ry);
+    dds_controller.keys(controller.keys);
+    
+    auto pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::WirelessController_>>(wireless_publisher_);
+    pub->Write(dds_controller);
+}
+
+void UnitreeInterface::PublishLowState(const PyLowState& state) {
+    if (config_.message_type == MessageType::HG) {
+        // HG message type
+        unitree_hg::msg::dds_::LowState_ dds_state;
+        
+        // Populate IMU state
+        dds_state.imu_state().quaternion(state.imu.quat);
+        dds_state.imu_state().gyroscope(state.imu.omega);
+        dds_state.imu_state().accelerometer(state.imu.accel);
+        dds_state.imu_state().rpy(state.imu.rpy);
+        
+        // Populate motor state
+        for (int i = 0; i < config_.num_motors; i++) {
+            dds_state.motor_state().at(i).q(state.motor.q[i]);
+            dds_state.motor_state().at(i).dq(state.motor.dq[i]);
+            dds_state.motor_state().at(i).ddq(state.motor.ddq[i]);
+            dds_state.motor_state().at(i).tau_est(state.motor.tau_est[i]);
+            dds_state.motor_state().at(i).temperature()[0] = state.motor.temperature[i];
+            dds_state.motor_state().at(i).vol(state.motor.voltage[i]);
+        }
+        
+        // Tick, mode and CRC
+        dds_state.tick(state.tick);
+        dds_state.mode_machine(state.mode_machine);
+        dds_state.crc(Crc32Core((uint32_t*)&dds_state, (sizeof(dds_state) >> 2) - 1));
+        
+        // Publish
+        auto pub = std::static_pointer_cast<ChannelPublisher<unitree_hg::msg::dds_::LowState_>>(lowstate_publisher_);
+        pub->Write(dds_state);
+        
+    } else {
+        // GO2 message type
+        unitree_go::msg::dds_::LowState_ dds_state;
+        
+        // Populate IMU state
+        dds_state.imu_state().quaternion(state.imu.quat);
+        dds_state.imu_state().gyroscope(state.imu.omega);
+        dds_state.imu_state().accelerometer(state.imu.accel);
+        dds_state.imu_state().rpy(state.imu.rpy);
+        
+        // Populate motor state
+        for (int i = 0; i < config_.num_motors; i++) {
+            dds_state.motor_state().at(i).q(state.motor.q[i]);
+            dds_state.motor_state().at(i).dq(state.motor.dq[i]);
+            dds_state.motor_state().at(i).ddq(state.motor.ddq[i]);
+            dds_state.motor_state().at(i).tau_est(state.motor.tau_est[i]);
+            dds_state.motor_state().at(i).temperature() = state.motor.temperature[i];
+            // Note: GO2 doesn't have voltage field, skip it
+        }
+        
+        // Tick and CRC (GO2 doesn't have mode_machine)
+        dds_state.tick(state.tick);
+        dds_state.crc(Crc32Core((uint32_t*)&dds_state, (sizeof(dds_state) >> 2) - 1));
+        
+        // Publish
+        auto pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::LowState_>>(lowstate_publisher_);
+        pub->Write(dds_state);
+    }
 }
 
 // Static factory methods
