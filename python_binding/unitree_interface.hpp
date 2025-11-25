@@ -100,12 +100,13 @@ struct PyImuState {
 struct PyMotorState {
   std::vector<float> q;
   std::vector<float> dq;
+  std::vector<float> ddq;
   std::vector<float> tau_est;
   std::vector<int> temperature;
   std::vector<float> voltage;
   
-  PyMotorState(int num_motors) : q(num_motors), dq(num_motors), tau_est(num_motors), 
-                                 temperature(num_motors), voltage(num_motors) {}
+  PyMotorState(int num_motors) : q(num_motors), dq(num_motors), ddq(num_motors), 
+                                 tau_est(num_motors), temperature(num_motors), voltage(num_motors) {}
 };
 
 struct PyMotorCommand {
@@ -130,6 +131,7 @@ struct PyWirelessController {
 struct PyLowState {
   PyImuState imu;
   PyMotorState motor;
+  uint32_t tick = 0;
   uint8_t mode_machine = 0;
   
   PyLowState(int num_motors) : motor(num_motors) {}
@@ -162,12 +164,13 @@ struct MotorCommand {
 struct MotorState {
   std::vector<float> q;
   std::vector<float> dq;
+  std::vector<float> ddq;
   std::vector<float> tau_est;
   std::vector<int> temperature;
   std::vector<float> voltage;
   
-  MotorState(int num_motors) : q(num_motors), dq(num_motors), tau_est(num_motors), 
-                               temperature(num_motors), voltage(num_motors) {}
+  MotorState(int num_motors) : q(num_motors), dq(num_motors), ddq(num_motors), 
+                               tau_est(num_motors), temperature(num_motors), voltage(num_motors) {}
 };
 
 // CRC function
@@ -201,12 +204,16 @@ class UnitreeInterface {
   
   DataBuffer<MotorState> motor_state_buffer_;
   DataBuffer<MotorCommand> motor_command_buffer_;
+  DataBuffer<MotorCommand> incoming_command_buffer_;
   DataBuffer<ImuState> imu_state_buffer_;
   DataBuffer<PyWirelessController> wireless_controller_buffer_;
 
   // DDS components - using void pointers for type flexibility
   std::shared_ptr<void> lowcmd_publisher_;
+  std::shared_ptr<void> lowcmd_subscriber_sim_;
+  std::shared_ptr<void> lowstate_publisher_;
   std::shared_ptr<void> lowstate_subscriber_;
+  std::shared_ptr<void> wireless_publisher_;
   std::shared_ptr<void> wireless_subscriber_;
   
   ThreadPtr command_writer_ptr_;
@@ -220,6 +227,7 @@ class UnitreeInterface {
   void LowStateHandler(const void *message);
   void WirelessControllerHandler(const void *message);
   void LowCommandWriter();
+  void IncomingLowCmdHandler(const void *message);
   
   // Convert internal structures to Python structures
   PyLowState ConvertToPyLowState();
@@ -253,6 +261,11 @@ class UnitreeInterface {
   void WriteLowCommand(const PyMotorCommand& command);
   void SetControlMode(PyControlMode mode);
   PyControlMode GetControlMode() const;
+
+  // Python interface methods for simulation bridge
+  void PublishLowState(const PyLowState& state);
+  PyMotorCommand ReadIncomingCommand();
+  void PublishWirelessController(const PyWirelessController& controller);
   
   // Utility methods
   PyMotorCommand CreateZeroCommand();
