@@ -32,12 +32,18 @@ ARG PY_TAG
 ARG ARCH
 ARG UNITREE_TAG
 ENV DEBIAN_FRONTEND=noninteractive
+# Install system packages first (without Python)
 RUN apt-get update && apt-get install -y \\
-    build-essential cmake git python3-pip \\
-    patchelf wget curl \\
+    build-essential cmake git wget curl patchelf \\
     libssl-dev libffi-dev libbz2-dev libreadline-dev libsqlite3-dev \\
     libncurses5-dev libncursesw5-dev xz-utils tk-dev libgdbm-dev \\
     libc6-dev libnss3-dev zlib1g-dev && \\
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python packages with proper ordering to avoid dependency issues
+RUN apt-get update && \\
+    apt-get install -y --no-install-recommends python3-lib2to3 python3-distutils && \\
+    apt-get install -y python3-pip python3-dev && \\
     rm -rf /var/lib/apt/lists/*
 
 # Install Python 3.8 (already available) or compile other versions from source

@@ -5,21 +5,6 @@ project(unitree_interface_python)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Prioritize virtual environment (conda/venv) Python over system Python
-set(Python_FIND_VIRTUALENV FIRST)
-
-# Find Python first (respects PYTHON_EXECUTABLE if provided via cmake -DPYTHON_EXECUTABLE=...)
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
-
-# Get pybind11 location from Python itself 
-# This ensures we use the pybind11 that matches the Python interpreter
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}" -m pybind11 --cmakedir
-    OUTPUT_VARIABLE pybind11_DIR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-
-# Now find using updated 'pybind11_DIR'
 find_package(pybind11 REQUIRED)
 
 # Use the unitree_sdk2 target from parent project
