@@ -7,7 +7,7 @@ if [ "$(basename $(pwd))" = "deploy" ]; then
 fi
 
 UNITREE_TAG=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
-PYTHON_VERSIONS=${PYTHON_VERSIONS:-"3.8 3.10"}
+PYTHON_VERSIONS=${PYTHON_VERSIONS:-"3.8 3.10 3.11"}
 ARCHITECTURES=${ARCHITECTURES:-"x86_64 aarch64"}
 
 echo "Building wheels for Python versions: $PYTHON_VERSIONS"
