@@ -1,33 +1,33 @@
 # Unitree Interface Python Binding
 
-这是一个基于 pybind11 的通用 Unitree 机器人 Python 接口，支持多种机器人类型（G1、H1、H1-2）和消息格式（HG、GO2）。
+This is a universal Unitree robot Python interface based on pybind11, supporting multiple robot types (G1, H1, H1-2) and message formats (HG, GO2).
 
-## 功能特性
+## Features
 
-- **多机器人支持**: 支持 G1、H1、H1-2 等多种机器人类型
-- **多消息格式**: 支持 HG 和 GO2 消息格式
-- **实时控制**: 支持 500Hz 的实时控制循环
-- **数据读取**: 读取机器人状态（IMU、电机状态等）和无线控制器输入
-- **命令发送**: 发送电机控制命令到机器人
-- **双控制模式**: 支持 PR (Pitch/Roll) 和 AB (A/B) 控制模式
-- **类型安全**: 提供完整的 Python 类型提示 (.pyi 文件)
-- **线程安全**: 使用缓冲区机制确保线程安全的数据交换
-- **工厂方法**: 提供便捷的机器人创建方法
+- **Multi-Robot Support**: Supports multiple robot types including G1, H1, H1-2
+- **Multiple Message Formats**: Supports HG and GO2 message formats
+- **Real-time Control**: Supports 500Hz real-time control loop
+- **Data Reading**: Read robot state (IMU, motor state, etc.) and wireless controller input
+- **Command Sending**: Send motor control commands to the robot
+- **Dual Control Modes**: Supports PR (Pitch/Roll) and AB (A/B) control modes
+- **Type Safety**: Provides complete Python type hints (.pyi files)
+- **Thread Safety**: Uses buffer mechanism to ensure thread-safe data exchange
+- **Factory Methods**: Provides convenient robot creation methods
 
-## 支持的机器人类型
+## Supported Robot Types
 
-| 机器人类型 | 电机数量 | 默认消息格式 | 描述 |
-|-----------|---------|-------------|------|
-| G1        | 29      | HG          | G1 人形机器人 |
-| H1        | 19      | GO2         | H1 人形机器人 |
-| H1-2      | 29      | HG          | H1-2 人形机器人 |
-| CUSTOM    | 自定义   | HG          | 自定义机器人配置 |
+| Robot Type | Number of Motors | Default Message Format | Description |
+|-----------|------------------|----------------------|-------------|
+| G1        | 29               | HG                   | G1 Humanoid Robot |
+| H1        | 19               | GO2                  | H1 Humanoid Robot |
+| H1-2      | 29               | HG                   | H1-2 Humanoid Robot |
+| CUSTOM    | Custom           | HG                   | Custom Robot Configuration |
 
-## 编译
+## Build
 
-### 从主项目编译（推荐）
+### Build from Main Project (Recommended)
 
-在主项目根目录执行：
+Execute in the main project root directory:
 
 ```bash
 mkdir build
@@ -36,100 +36,100 @@ cmake -DBUILD_PYTHON_BINDING=ON -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 ```
 
-### 单独编译
+### Standalone Build
 
-在 `python_binding` 目录中：
+In the `python_binding` directory:
 
 ```bash
 ./build.sh --sdk-path /opt/unitree_sdk2
 ```
 
-## 系统要求
+## System Requirements
 
-- Ubuntu 18.04/20.04/22.04 或兼容系统
+- Ubuntu 18.04/20.04/22.04 or compatible system
 - Python 3.6+
 - CMake 3.12+
-- GCC 7+ 或 Clang 6+
+- GCC 7+ or Clang 6+
 - Unitree SDK2
 - pybind11
 
-## 安装依赖
+## Install Dependencies
 
 ```bash
-# 安装基本依赖
+# Install basic dependencies
 sudo apt-get update
 sudo apt-get install build-essential cmake python3-dev python3-pip
 
-# 安装 Python 依赖
+# Install Python dependencies
 pip3 install pybind11 pybind11-stubgen numpy
 ```
 
-## 使用方法
+## Usage
 
-### 基本使用
+### Basic Usage
 
 ```python
 import unitree_interface
 
-# 方法1: 使用工厂方法创建机器人
+# Method 1: Create robot using factory method
 robot = unitree_interface.create_robot("eth0", unitree_interface.RobotType.G1)
 
-# 方法2: 直接创建接口
+# Method 2: Create interface directly
 robot = unitree_interface.UnitreeInterface("eth0", unitree_interface.RobotType.H1, unitree_interface.MessageType.GO2)
 
-# 方法3: 使用预定义配置
+# Method 3: Use predefined configuration
 robot = unitree_interface.UnitreeInterface("eth0", unitree_interface.RobotConfigs.G1_HG)
 
-# 读取机器人状态
+# Read robot state
 state = robot.read_low_state()
 print(f"IMU RPY: {state.imu.rpy}")
 print(f"Joint positions: {state.motor.q}")
 
-# 读取无线控制器状态
+# Read wireless controller state
 controller = robot.read_wireless_controller()
 print(f"Left stick: {controller.left_stick}")
 
-# 创建零位置命令
+# Create zero position command
 cmd = robot.create_zero_command()
 
-# 设置目标位置（根据机器人类型调整关节索引）
+# Set target position (adjust joint index according to robot type)
 num_motors = robot.get_num_motors()
 if num_motors > 4:
-    cmd.q_target[4] = 0.1  # 左踝关节俯仰
+    cmd.q_target[4] = 0.1  # Left ankle pitch
 if num_motors > 5:
-    cmd.q_target[5] = 0.0  # 左踝关节横滚
+    cmd.q_target[5] = 0.0  # Left ankle roll
 
-# 发送命令到机器人
+# Send command to robot
 robot.write_low_command(cmd)
 ```
 
-### 通用接口示例
+### General Interface Example
 
-运行提供的通用接口示例：
+Run the provided general interface example:
 
 ```bash
-# G1 机器人示例
+# G1 robot example
 python3 example_general_interface.py eth0 G1
 
-# H1 机器人示例
+# H1 robot example
 python3 example_general_interface.py eth0 H1 GO2
 
-# H1-2 机器人示例
+# H1-2 robot example
 python3 example_general_interface.py eth0 H1_2
 ```
 
-这个示例演示了：
-1. 机器人移动到零位置 (3秒)
-2. 关节摆动演示（连续）
-3. 控制器手动控制（按 A 按钮）
+This example demonstrates:
+1. Robot moves to zero position (3 seconds)
+2. Joint swing demonstration (continuous)
+3. Controller manual control (press A button)
 
-## API 参考
+## API Reference
 
-### 主要类
+### Main Classes
 
 #### `UnitreeInterface`
 
-主要的机器人控制接口类。
+Main robot control interface class.
 
 ```python
 def __init__(self, network_interface: str, robot_type: RobotType, message_type: MessageType = MessageType.HG) -> None
@@ -149,133 +149,133 @@ def get_num_motors(self) -> int
 def get_robot_name(self) -> str
 ```
 
-### 工厂方法
+### Factory Methods
 
 ```python
-# 便捷的机器人创建方法
+# Convenient robot creation methods
 unitree_interface.create_g1(network_interface: str, message_type: MessageType = MessageType.HG) -> UnitreeInterface
 unitree_interface.create_h1(network_interface: str, message_type: MessageType = MessageType.GO2) -> UnitreeInterface
 unitree_interface.create_h1_2(network_interface: str, message_type: MessageType = MessageType.HG) -> UnitreeInterface
 unitree_interface.create_custom(network_interface: str, num_motors: int, message_type: MessageType = MessageType.HG) -> UnitreeInterface
 
-# 通用创建方法
+# General creation method
 unitree_interface.create_robot(network_interface: str, robot_type: RobotType, message_type: MessageType = MessageType.HG) -> UnitreeInterface
 ```
 
-### 枚举类型
+### Enumeration Types
 
 ```python
 class RobotType(Enum):
-    G1 = 0      # G1 人形机器人 (29 电机)
-    H1 = 1      # H1 人形机器人 (19 电机)
-    H1_2 = 2    # H1-2 人形机器人 (29 电机)
-    CUSTOM = 99 # 自定义机器人
+    G1 = 0      # G1 Humanoid Robot (29 motors)
+    H1 = 1      # H1 Humanoid Robot (19 motors)
+    H1_2 = 2    # H1-2 Humanoid Robot (29 motors)
+    CUSTOM = 99 # Custom Robot
 
 class MessageType(Enum):
-    HG = 0   # Humanoid/Go1 消息格式
-    GO2 = 1  # Go2 消息格式
+    HG = 0   # Humanoid/Go1 message format
+    GO2 = 1  # Go2 message format
 
 class ControlMode(Enum):
-    PR = 0  # Pitch/Roll 模式
-    AB = 1  # A/B 模式
+    PR = 0  # Pitch/Roll mode
+    AB = 1  # A/B mode
 ```
 
-### 预定义配置
+### Predefined Configurations
 
 ```python
-unitree_interface.RobotConfigs.G1_HG    # G1 + HG 消息
-unitree_interface.RobotConfigs.H1_GO2   # H1 + GO2 消息
-unitree_interface.RobotConfigs.H1_2_HG  # H1-2 + HG 消息
+unitree_interface.RobotConfigs.G1_HG    # G1 + HG message
+unitree_interface.RobotConfigs.H1_GO2   # H1 + GO2 message
+unitree_interface.RobotConfigs.H1_2_HG  # H1-2 + HG message
 ```
 
-### 数据结构
+### Data Structures
 
 ```python
 class LowState:
-    imu: ImuState           # IMU 状态
-    motor: MotorState       # 电机状态
-    mode_machine: int       # 机器人模式机状态
+    imu: ImuState           # IMU state
+    motor: MotorState       # Motor state
+    mode_machine: int       # Robot mode machine state
 
 class MotorState:
-    q: List[float]          # 关节位置 [rad]
-    dq: List[float]         # 关节速度 [rad/s]
-    tau_est: List[float]    # 估计关节力矩 [N*m]
-    temperature: List[int]  # 电机温度 [°C]
-    voltage: List[float]    # 电机电压 [V]
+    q: List[float]          # Joint positions [rad]
+    dq: List[float]         # Joint velocities [rad/s]
+    tau_est: List[float]    # Estimated joint torques [N*m]
+    temperature: List[int]  # Motor temperatures [°C]
+    voltage: List[float]    # Motor voltages [V]
 
 class MotorCommand:
-    q_target: List[float]   # 目标关节位置 [rad]
-    dq_target: List[float]  # 目标关节速度 [rad/s]
-    kp: List[float]         # 位置增益
-    kd: List[float]         # 速度增益
-    tau_ff: List[float]     # 前馈力矩 [N*m]
+    q_target: List[float]   # Target joint positions [rad]
+    dq_target: List[float]  # Target joint velocities [rad/s]
+    kp: List[float]         # Position gains
+    kd: List[float]         # Velocity gains
+    tau_ff: List[float]     # Feedforward torques [N*m]
 
 class WirelessController:
-    left_stick: List[float]  # 左摇杆 [x, y]
-    right_stick: List[float] # 右摇杆 [x, y]
-    A: bool                  # A 按钮
-    B: bool                  # B 按钮
-    X: bool                  # X 按钮
-    Y: bool                  # Y 按钮
-    L1: bool                 # L1 按钮
-    L2: bool                 # L2 按钮
-    R1: bool                 # R1 按钮
-    R2: bool                 # R2 按钮
+    left_stick: List[float]  # Left joystick [x, y]
+    right_stick: List[float] # Right joystick [x, y]
+    A: bool                  # A button
+    B: bool                  # B button
+    X: bool                  # X button
+    Y: bool                  # Y button
+    L1: bool                 # L1 button
+    L2: bool                 # L2 button
+    R1: bool                 # R1 button
+    R2: bool                 # R2 button
 ```
 
-## 安全注意事项
+## Safety Precautions
 
-⚠️ **重要安全提示**:
+⚠️ **Important Safety Notes**:
 
-- 在运行任何控制程序之前，确保机器人处于安全环境
-- 始终准备紧急停止按钮
-- 测试新控制算法时使用较小的运动幅度
-- 监控关节温度和电压
-- 使用无线控制器的 B 按钮作为紧急停止
-- 确保使用正确的消息格式（HG vs GO2）
+- Ensure the robot is in a safe environment before running any control program
+- Always have an emergency stop button ready
+- Use smaller motion amplitudes when testing new control algorithms
+- Monitor joint temperatures and voltages
+- Use the B button on the wireless controller as an emergency stop
+- Ensure the correct message format is used (HG vs GO2)
 
-## 故障排除
+## Troubleshooting
 
-### 编译错误
+### Build Errors
 
-1. **找不到 Unitree SDK**:
+1. **Unitree SDK not found**:
    ```
    CMake Error: UNITREE_SDK not found
    ```
-   解决：确保在主项目根目录编译，或检查SDK路径
+   Solution: Ensure building from the main project root directory, or check SDK path
 
-2. **找不到 pybind11**:
+2. **pybind11 not found**:
    ```
    CMake Error: pybind11 not found
    ```
-   解决：`pip install pybind11`
+   Solution: `pip install pybind11`
 
-### 运行时错误
+### Runtime Errors
 
-1. **模块导入失败**:
+1. **Module import failed**:
    ```python
    ImportError: No module named 'unitree_interface'
    ```
-   解决：确保编译后的 `.so` 文件在 Python 路径中
+   Solution: Ensure the compiled `.so` file is in the Python path
 
-2. **网络连接失败**:
+2. **Network connection failed**:
    ```
    Error: Failed to initialize DDS
    ```
-   解决：检查网络接口名称是否正确，机器人是否连接
+   Solution: Check if the network interface name is correct and if the robot is connected
 
-3. **消息格式不匹配**:
+3. **Message format mismatch**:
    ```
    Error: Message type mismatch
    ```
-   解决：确保使用正确的消息格式（H1 使用 GO2，G1/H1-2 使用 HG）
+   Solution: Ensure the correct message format is used (H1 uses GO2, G1/H1-2 use HG)
 
-### 机器人类型选择
+### Robot Type Selection
 
-- **G1**: 29 个电机，使用 HG 消息格式
-- **H1**: 19 个电机，使用 GO2 消息格式
-- **H1-2**: 29 个电机，使用 HG 消息格式
+- **G1**: 29 motors, uses HG message format
+- **H1**: 19 motors, uses GO2 message format
+- **H1-2**: 29 motors, uses HG message format
 
-## 许可证
+## License
 
-请参考 Unitree SDK2 的许可证条款。 
+Please refer to the Unitree SDK2 license terms.
