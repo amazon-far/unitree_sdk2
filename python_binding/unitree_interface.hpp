@@ -53,17 +53,18 @@ struct RobotConfig {
     MessageType message_type;
     int num_motors;
     std::string name;
+    int control_frequency_hz;
     
-    RobotConfig(RobotType rt, MessageType mt, int nm, const std::string& n)
-        : robot_type(rt), message_type(mt), num_motors(nm), name(n) {}
+    RobotConfig(RobotType rt, MessageType mt, int nm, const std::string& n, int freq = 500)
+        : robot_type(rt), message_type(mt), num_motors(nm), name(n), control_frequency_hz(freq) {}
 };
 
 // Predefined robot configurations
 namespace RobotConfigs {
-    static const RobotConfig G1_HG(RobotType::G1, MessageType::HG, 29, "G1-HG");
-    static const RobotConfig H1_GO2(RobotType::H1, MessageType::GO2, 19, "H1-GO2");
-    static const RobotConfig H1_2_HG(RobotType::H1_2, MessageType::HG, 29, "H1-2-HG");
-    static const RobotConfig GO2_GO2(RobotType::GO2, MessageType::GO2, 12, "GO2-GO2");
+    static const RobotConfig G1_HG(RobotType::G1, MessageType::HG, 29, "G1-HG", 500);
+    static const RobotConfig H1_GO2(RobotType::H1, MessageType::GO2, 19, "H1-GO2", 500);
+    static const RobotConfig H1_2_HG(RobotType::H1_2, MessageType::HG, 29, "H1-2-HG", 500);
+    static const RobotConfig GO2_GO2(RobotType::GO2, MessageType::GO2, 12, "GO2-GO2", 500);
 }
 
 template <typename T>

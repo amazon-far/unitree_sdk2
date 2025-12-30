@@ -172,12 +172,13 @@ void UnitreeInterface::InitializeDDS(const std::string& networkInterface) {
     auto wireless_pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::WirelessController_>>(wireless_publisher_);
     wireless_pub->InitChannel();
     
-    // Create command writer thread
+    // Create command writer thread with configurable frequency
+    int period_us = 1000000 / config_.control_frequency_hz;
     command_writer_ptr_ = CreateRecurrentThreadEx(
-        "command_writer", UT_CPU_ID_NONE, 2000, &UnitreeInterface::LowCommandWriter, this);
+        "command_writer", UT_CPU_ID_NONE, period_us, &UnitreeInterface::LowCommandWriter, this);
     
-    std::cout << "UnitreeInterface initialized: " << config_.name 
-              << " (" << config_.num_motors << " motors, " 
+    std::cout << "UnitreeInterface initialized: " << config_.name
+              << " (" << config_.num_motors << " motors, "
               << (config_.message_type == MessageType::HG ? "HG" : "GO2") << " messages)"
               << " on interface: " << networkInterface << std::endl;
 }
@@ -575,3 +576,4 @@ std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateGO2(const std::string&
 std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateCustom(const std::string& networkInterface, int num_motors, MessageType message_type) {
     return std::make_shared<UnitreeInterface>(networkInterface, RobotType::CUSTOM, message_type, num_motors);
 }
+
