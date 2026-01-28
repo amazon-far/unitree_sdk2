@@ -8,7 +8,7 @@ from cyclonedds.internal import dds_c_t
 from cyclonedds.pub import DataWriter
 from cyclonedds.sub import DataReader
 from cyclonedds.topic import Topic
-from cyclonedds.qos import Qos
+from cyclonedds.qos import Qos, Policy
 from cyclonedds.core import DDSException, Listener
 from cyclonedds.util import duration
 from cyclonedds.internal import dds_c_t, InvalidSample
@@ -41,11 +41,17 @@ class Channel:
             self.__queueEnable = False
             self.__threadEvent = None
             self.__threadReader = None
+            self.__listener = None
+            
         
         def Init(self, participant: DomainParticipant, topic: Topic, qos: Qos = None, handler: Callable = None, queueLen: int = 0):
             if handler is None:
-                self.__reader = DataReader(participant, topic, qos)
+                # Non-handler path (polling mode) - use named args for consistency
+                self.__reader = DataReader(participant, topic, qos=qos)
             else:
+                # Handler path (callback mode)
+                print("[DEBUG] __Reader.Init handler-path qos =", qos, flush=True)
+                
                 self.__handler = handler
                 if queueLen > 0:
                     self.__queueEnable = True
@@ -53,7 +59,12 @@ class Channel:
                     self.__threadEvent = Event()
                     self.__threadReader = Thread(target=self.__ChannelReaderThreadFunc, name="ch_reader", daemon=True)
                     self.__threadReader.start()
-                self.__reader = DataReader(participant, topic, qos, Listener(on_data_available=self.__OnDataAvailable))
+                
+                # Create listener and reader with named arguments to prevent signature mismatch
+                self.__listener = Listener(on_data_available=self.__OnDataAvailable)
+                self.__reader = DataReader(participant, topic, qos=qos, listener=self.__listener)
+                
+                print("[DEBUG] created reader =", self.__reader, flush=True)
 
         def Read(self, timeout: float = None):
             sample = None
@@ -61,19 +72,25 @@ class Channel:
                 if timeout is None:
                     sample = self.__reader.take_one()
                 else:
-                    sample = self.__reader.take_one(timeout=duration(seconds=timeout))
+                    # Fix timeout handling - convert to nanoseconds properly
+                    ns = int(timeout * 1e9)
+                    sample = self.__reader.take_one(timeout=duration(nanoseconds=ns))
             except DDSException as e:
-                print("[Reader] catch DDSException msg:", e.msg)
+                print("[Reader] catch DDSException msg:", e.msg, flush=True)
             except TimeoutError as e:
-                print("[Reader] take sample timeout")
-            except:
-                print("[Reader] take sample error")
+                print("[Reader] take sample timeout", flush=True)
+            except Exception as e:
+                import traceback
+                print("ERROR in Read():", repr(e), flush=True)
+                traceback.print_exc()
 
             return sample
 
         def Close(self):
             if self.__reader is not None:
                 del self.__reader
+
+            self.__listener = None
 
             if self.__queueEnable:
                 self.__threadEvent.set()
@@ -86,13 +103,15 @@ class Channel:
             try:
                 samples = reader.take(1)
             except DDSException as e:
-                print("[Reader] catch DDSException error. msg:", e.msg)
+                print("[Reader] catch DDSException error. msg:", e.msg, flush=True)
                 return
             except TimeoutError as e:
-                print("[Reader] take sample timeout")
+                print("[Reader] take sample timeout", flush=True)
                 return
-            except:
-                print("[Reader] take sample error")
+            except Exception as e:
+                import traceback
+                print("ERROR in __OnDataAvailable():", repr(e), flush=True)
+                traceback.print_exc()
                 return
 
             if samples is None:
@@ -122,9 +141,11 @@ class Channel:
         def __init__(self):
             self.__writer = None
             self.__publication_matched_count = 0
+            self.__listener = None
         
         def Init(self, participant: DomainParticipant, topic: Topic, qos: Qos = None):
-            self.__writer = DataWriter(participant, topic, qos, Listener(on_publication_matched=self.__OnPublicationMatched))
+            self.__listener = Listener(on_publication_matched=self.__OnPublicationMatched)
+            self.__writer = DataWriter(participant, topic, qos, self.__listener)
             time.sleep(0.2)
 
         def Write(self, sample: Any, timeout: float = None):
@@ -154,6 +175,7 @@ class Channel:
         def Close(self):
             if self.__writer is not None:
                 del self.__writer
+            self.__listener = None
         
         def __OnPublicationMatched(self, writer: DataWriter, status: dds_c_t.publication_matched_status):
             self.__publication_matched_count = status.current_count
@@ -170,6 +192,13 @@ class Channel:
         self.__writer.Init(self.__participant, self.__topic, qos)
 
     def SetReader(self, qos: Qos = None, handler: Callable = None, queueLen: int = 0):
+        # Force Reliable QoS for callback-based subscribers if no QoS is provided
+        if handler is not None and qos is None:
+            qos = Qos(
+                Policy.Reliability.Reliable(),
+                Policy.History.KeepLast(1),
+            )
+            print("[DEBUG] SetReader: forcing Reliable QoS for handler-based reader", flush=True)
         self.__reader.Init(self.__participant, self.__topic, qos, handler, queueLen)
         
     def Write(self, sample: Any, timeout: float = None):
@@ -280,9 +309,14 @@ class ChannelSubscriber:
         self.__channel = factory.CreateChannel(name, type)
         self.__inited = False
 
-    def Init(self, handler: Callable = None, queueLen: int = 0):
+    def Init(self, handler: Callable = None, queueLen: int = 0, qos: Qos = None):
         if not self.__inited:
-            self.__channel.SetReader(None, handler, queueLen)
+            if qos is None:
+                qos = Qos(
+                    Policy.Reliability.Reliable(max_blocking_time=10000),
+                    Policy.History.KeepLast(1),
+                )
+            self.__channel.SetReader(qos, handler, queueLen)
             self.__inited = True
 
     def Close(self):

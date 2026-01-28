@@ -1,25 +1,29 @@
 ChannelConfigHasInterface = '''<?xml version="1.0" encoding="UTF-8" ?>
     <CycloneDDS>
-        <Domain Id="any">
+        <Domain Id="0">
             <General>
-                <Interfaces>
-                    <NetworkInterface name="$__IF_NAME__$" priority="default" multicast="default"/>
-                </Interfaces>
+            <Interfaces>
+                <NetworkInterface address="192.168.123.100"/>
+            </Interfaces>
+            <AllowMulticast>true</AllowMulticast>
             </General>
-            <Tracing>
-                <Verbosity>config</Verbosity>
-            <OutputFile>/tmp/cdds.LOG</OutputFile>
-        </Tracing>
+            <SharedMemory>
+            <Enable>false</Enable>
+            </SharedMemory>
         </Domain>
     </CycloneDDS>'''
 
 ChannelConfigAutoDetermine = '''<?xml version="1.0" encoding="UTF-8" ?>
     <CycloneDDS>
-        <Domain Id="any">
+        <Domain Id="0">
             <General>
-                <Interfaces>
-                    <NetworkInterface autodetermine=\"true\" priority=\"default\" multicast=\"default\" />
-                </Interfaces>
+            <Interfaces>
+                <NetworkInterface address="192.168.123.100"/>
+            </Interfaces>
+            <AllowMulticast>true</AllowMulticast>
             </General>
+            <SharedMemory>
+            <Enable>false</Enable>
+            </SharedMemory>
         </Domain>
     </CycloneDDS>'''
