@@ -228,20 +228,22 @@ class ChannelFactory(Singleton):
     def __init__(self):
         super().__init__()
 
-    def Init(self, id: int, networkInterface: str = None, qos: Qos = None):
+    def Init(self, id: int, networkInterface: str = None, qos: Qos = None, config: str = ""):
         if self.__class__.__initialized:
             return True
         
         with self.__class__.__init_lock:
             if self.__class__.__initialized:
                 return True
+                        
+            if not config:
+                # choose config
+                if networkInterface is None:
+                    config = ChannelConfigAutoDetermine
+                else:
+                    config = ChannelConfigHasInterface.replace('$__IF_NAME__$', networkInterface)
             
-            config = None
-            # choose config
-            if networkInterface is None:
-                config = ChannelConfigAutoDetermine
-            else:
-                config = ChannelConfigHasInterface.replace('$__IF_NAME__$', networkInterface)
+            print(f"using DDS config {config}")
 
             try:
                 self.__class__.__domain = Domain(id, config)
@@ -329,7 +331,7 @@ class ChannelSubscriber:
 """
 " function ChannelFactoryInitialize. used to intialize channel everenment.
 """
-def ChannelFactoryInitialize(id: int = 0, networkInterface: str = None):
+def ChannelFactoryInitialize(id: int = 0, networkInterface: str = None, config: str = ""):
     factory = ChannelFactory()
-    if not factory.Init(id, networkInterface):
+    if not factory.Init(id=id, networkInterface=networkInterface, config=config):
         raise Exception("channel factory init error.")
