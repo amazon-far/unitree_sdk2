@@ -84,7 +84,7 @@ class Channel:
             except Exception as e:
                 import traceback
                 logger.debug("ERROR in Read():", repr(e))
-                traceback.logger.debug_exc()
+                traceback.print_exc()
 
             return sample
 
@@ -113,7 +113,7 @@ class Channel:
             except Exception as e:
                 import traceback
                 logger.debug("ERROR in __OnDataAvailable():", repr(e))
-                traceback.logger.debug_exc()
+                traceback.print_exc()
                 return
 
             if samples is None:
