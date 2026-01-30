@@ -9,6 +9,8 @@ from ..idl.unitree_api.msg.dds_ import Response_ as Response
 from ..core.channel import ChannelFactory
 from ..core.channel_name import ChannelType, GetClientChannelName
 from .request_future import RequestFuture, RequestFutureQueue
+import logging
+logger = logging.getLogger("dds")
 
 
 """
@@ -37,7 +39,7 @@ class ClientStub:
         if self.__sendChannel.Write(request, timeout):
             return True
         else:
-            print("[ClientStub] send error. id:", request.header.identity.id)
+            logger.debug("[ClientStub] send error. id:", request.header.identity.id)
             return False
 
     def SendRequest(self, request: Request, timeout: float):
@@ -50,7 +52,7 @@ class ClientStub:
         if self.__sendChannel.Write(request, timeout):
             return future
         else:
-            print("[ClientStub] send request error. id:", request.header.identity.id)
+            logger.debug("[ClientStub] send request error. id:", request.header.identity.id)
             self.__futureQueue.Remove(id)
             return None
 
@@ -60,10 +62,10 @@ class ClientStub:
     def __ResponseHandler(self, response: Response):
         id = response.header.identity.id
         # apiId = response.header.identity.api_id
-        # print("[ClientStub] responseHandler recv response id:", id, ", apiId:", apiId)
+        # logger.debug("[ClientStub] responseHandler recv response id:", id, ", apiId:", apiId)
         future = self.__futureQueue.Get(id)
         if future is None:
-            # print("[ClientStub] get future from queue error. id:", id)
+            # logger.debug("[ClientStub] get future from queue error. id:", id)
             pass
         elif not future.Ready(response):
-            print("[ClientStub] set future ready error.")
+            logger.debug("[ClientStub] set future ready error.")

@@ -19,6 +19,8 @@ from .channel_config import ChannelConfigAutoDetermine, ChannelConfigHasInterfac
 # for singleton
 from ..utils.singleton import Singleton
 from ..utils.bqueue import BQueue
+import logging
+logger = logging.getLogger("dds")
 
 
 """
@@ -50,7 +52,7 @@ class Channel:
                 self.__reader = DataReader(participant, topic, qos=qos)
             else:
                 # Handler path (callback mode)
-                print("[DEBUG] __Reader.Init handler-path qos =", qos, flush=True)
+                logger.debug("[DEBUG] __Reader.Init handler-path qos =", qos)
                 
                 self.__handler = handler
                 if queueLen > 0:
@@ -64,7 +66,7 @@ class Channel:
                 self.__listener = Listener(on_data_available=self.__OnDataAvailable)
                 self.__reader = DataReader(participant, topic, qos=qos, listener=self.__listener)
                 
-                print("[DEBUG] created reader =", self.__reader, flush=True)
+                logger.debug("[DEBUG] created reader =", self.__reader)
 
         def Read(self, timeout: float = None):
             sample = None
@@ -76,13 +78,13 @@ class Channel:
                     ns = int(timeout * 1e9)
                     sample = self.__reader.take_one(timeout=duration(nanoseconds=ns))
             except DDSException as e:
-                print("[Reader] catch DDSException msg:", e.msg, flush=True)
+                logger.debug("[Reader] catch DDSException msg:", e.msg)
             except TimeoutError as e:
-                print("[Reader] take sample timeout", flush=True)
+                logger.debug("[Reader] take sample timeout")
             except Exception as e:
                 import traceback
-                print("ERROR in Read():", repr(e), flush=True)
-                traceback.print_exc()
+                logger.debug("ERROR in Read():", repr(e))
+                traceback.logger.debug_exc()
 
             return sample
 
@@ -103,15 +105,15 @@ class Channel:
             try:
                 samples = reader.take(1)
             except DDSException as e:
-                print("[Reader] catch DDSException error. msg:", e.msg, flush=True)
+                logger.debug("[Reader] catch DDSException error. msg:", e.msg)
                 return
             except TimeoutError as e:
-                print("[Reader] take sample timeout", flush=True)
+                logger.debug("[Reader] take sample timeout")
                 return
             except Exception as e:
                 import traceback
-                print("ERROR in __OnDataAvailable():", repr(e), flush=True)
-                traceback.print_exc()
+                logger.debug("ERROR in __OnDataAvailable():", repr(e))
+                traceback.logger.debug_exc()
                 return
 
             if samples is None:
@@ -155,7 +157,7 @@ class Channel:
             while waitsec > 0.0 and self.__publication_matched_count == 0:
                 time.sleep(0.1)
                 waitsec = waitsec - 0.1
-            #   print(time.time())
+            #   logger.debug(time.time())
 
             # check waitsec
             if timeout is not None and waitsec <= 0.0:
@@ -164,10 +166,10 @@ class Channel:
             try:
                 self.__writer.write(sample)
             except DDSException as e:
-                print("[Writer] catch DDSException error. msg:", e.msg)
+                logger.debug("[Writer] catch DDSException error. msg:", e.msg)
                 return False
             except Exception as e:
-                print("[Writer] write sample error. msg:", e.args())
+                logger.debug("[Writer] write sample error. msg:", e.args())
                 return False
 
             return True
@@ -198,7 +200,7 @@ class Channel:
                 Policy.Reliability.Reliable(),
                 Policy.History.KeepLast(1),
             )
-            print("[DEBUG] SetReader: forcing Reliable QoS for handler-based reader", flush=True)
+            logger.debug("[DEBUG] SetReader: forcing Reliable QoS for handler-based reader")
         self.__reader.Init(self.__participant, self.__topic, qos, handler, queueLen)
         
     def Write(self, sample: Any, timeout: float = None):
@@ -243,24 +245,24 @@ class ChannelFactory(Singleton):
                 else:
                     config = ChannelConfigHasInterface.replace('$__IF_NAME__$', networkInterface)
             
-            print(f"using DDS config {config}")
+            logger.debug(f"using DDS config {config}")
 
             try:
                 self.__class__.__domain = Domain(id, config)
             except DDSException as e:
-                print("[ChannelFactory] create domain error. msg:", e.msg)
+                logger.debug("[ChannelFactory] create domain error. msg:", e.msg)
                 return False
             except:
-                print("[ChannelFactory] create domain error.")
+                logger.debug("[ChannelFactory] create domain error.")
                 return False
 
             try:
                 self.__class__.__participant = DomainParticipant(id)
             except DDSException as e:
-                print("[ChannelFactory] create domain participant error. msg:", e.msg)
+                logger.debug("[ChannelFactory] create domain participant error. msg:", e.msg)
                 return False
             except:
-                print("[ChannelFactory] create domain participant error")
+                logger.debug("[ChannelFactory] create domain participant error")
                 return False
 
             self.__class__.__qos = qos
