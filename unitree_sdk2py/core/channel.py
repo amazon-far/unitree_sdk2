@@ -77,6 +77,8 @@ class Channel:
                     # Fix timeout handling - convert to nanoseconds properly
                     ns = int(timeout * 1e9)
                     sample = self.__reader.take_one(timeout=duration(nanoseconds=ns))
+            except StopIteration as e:
+                logger.debug("[Reader] catch StopIteration msg:", e.msg)
             except DDSException as e:
                 logger.debug("[Reader] catch DDSException msg:", e.msg)
             except TimeoutError as e:
