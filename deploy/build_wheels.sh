@@ -7,7 +7,7 @@ if [ "$(basename $(pwd))" = "deploy" ]; then
 fi
 
 UNITREE_TAG=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
-PYTHON_VERSIONS=${PYTHON_VERSIONS:-"3.8 3.10 3.11"}
+PYTHON_VERSIONS=${PYTHON_VERSIONS:-"3.8 3.10 3.11 3.12"}
 ARCHITECTURES=${ARCHITECTURES:-"x86_64 aarch64"}
 
 echo "Building wheels for Python versions: $PYTHON_VERSIONS"
@@ -69,6 +69,16 @@ RUN if [ "\$PYTHON_VER" = "3.8" ]; then \\
         make altinstall && \\
         ln -sf /usr/local/bin/python3.11 /usr/bin/python3.11 && \\
         cd / && rm -rf /tmp/Python-3.11.9*; \\
+    elif [ "\$PYTHON_VER" = "3.12" ]; then \\
+        cd /tmp && \\
+        wget https://www.python.org/ftp/python/3.12.8/Python-3.12.8.tgz && \\
+        tar xzf Python-3.12.8.tgz && \\
+        cd Python-3.12.8 && \\
+        ./configure --enable-optimizations --prefix=/usr/local && \\
+        make -j\$(nproc) && \\
+        make altinstall && \\
+        ln -sf /usr/local/bin/python3.12 /usr/bin/python3.12 && \\
+        cd / && rm -rf /tmp/Python-3.12.8*; \\
     fi
 
 RUN python\$PYTHON_VER -m pip install --upgrade pip setuptools wheel build pybind11
