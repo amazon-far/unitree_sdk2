@@ -12,8 +12,6 @@ import math
 import signal
 from typing import Optional
 
-sys.path.append("/home/ANT.AMAZON.COM/zyuanhan/Humanoid/falcon_deploy/unitree_sdk2/build/lib")
-
 try:
     import unitree_interface
 except ImportError:
