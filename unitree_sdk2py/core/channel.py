@@ -199,7 +199,7 @@ class Channel:
         # Force Reliable QoS for callback-based subscribers if no QoS is provided
         if handler is not None and qos is None:
             qos = Qos(
-                Policy.Reliability.Reliable(),
+                Policy.Reliability.Reliable(max_blocking_time=10000),
                 Policy.History.KeepLast(1),
             )
             logger.debug("[DEBUG] SetReader: forcing Reliable QoS for handler-based reader")
