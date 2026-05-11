@@ -68,11 +68,17 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def_readwrite("mode_machine", &PyLowState::mode_machine);
     
     py::class_<RobotConfig>(m, "RobotConfig")
-        .def(py::init<RobotType, MessageType, int, const std::string&>())
+        .def(py::init<RobotType, MessageType, int, const std::string&, int>(),
+             py::arg("robot_type"),
+             py::arg("message_type"),
+             py::arg("num_motors"),
+             py::arg("name"),
+             py::arg("control_frequency_hz") = 500)
         .def_readwrite("robot_type", &RobotConfig::robot_type)
         .def_readwrite("message_type", &RobotConfig::message_type)
         .def_readwrite("num_motors", &RobotConfig::num_motors)
-        .def_readwrite("name", &RobotConfig::name);
+        .def_readwrite("name", &RobotConfig::name)
+        .def_readwrite("control_frequency_hz", &RobotConfig::control_frequency_hz);
     
     // Main interface class
     py::class_<UnitreeInterface, std::shared_ptr<UnitreeInterface>>(m, "UnitreeInterface")
