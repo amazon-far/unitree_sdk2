@@ -9,12 +9,15 @@ if [ -z "$ARCH" ] || [ -z "$PY_VER" ]; then
     exit 1
 fi
 
-WHEEL="unitree_sdk2-0.1.1-cp${PY_VER//./}-cp${PY_VER//./}-linux_${ARCH}.whl"
+CP_TAG="cp${PY_VER//./}"
+# Match the cibuildwheel/auditwheel output name, e.g.
+# far_unitree_sdk-0.1.3-cp311-cp311-manylinux_2_31_x86_64.whl
+WHEEL_GLOB="far_unitree_sdk-*-${CP_TAG}-${CP_TAG}-manylinux*_${ARCH}.whl"
 
-echo "Testing $WHEEL on $ARCH with Python $PY_VER"
+echo "Testing wheel matching '$WHEEL_GLOB' on $ARCH with Python $PY_VER"
 
 docker run --rm --platform linux/$ARCH \
     -v "$(pwd)/dist:/wheels:ro" \
     -v "$(pwd)/test_wheels.py:/test.py:ro" \
     python:${PY_VER}-slim \
-    bash -c "pip install -q /wheels/$WHEEL && python /test.py"
+    bash -c "set -e; whl=\$(ls /wheels/$WHEEL_GLOB | head -1); echo \"Installing \$whl\"; pip install -q \"\$whl\" && python /test.py"

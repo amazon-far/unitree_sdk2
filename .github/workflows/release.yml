@@ -1,0 +1,110 @@
+name: Build & Publish wheels
+
+# Builds manylinux wheels with cibuildwheel and publishes them to (Test)PyPI
+# using Trusted Publishing (OIDC) — no API tokens stored in the repo.
+#
+# Wheels are built on native per-arch AWS CodeBuild runners
+# (sdk-runner-unitree-x86 / sdk-runner-unitree-arm), so there is no QEMU
+# emulation and aarch64 is a first-class native build + test.
+#
+# NOTE: the CodeBuild runner projects must have Docker available (cibuildwheel
+# launches manylinux containers). The `${{ matrix.arch == 'x86_64' && 'x86' || 'arm' }}`
+# expression maps the cibuildwheel arch to the runner project's name suffix.
+#
+# Triggers:
+#   * push a tag like v0.1.3   -> builds + publishes to TestPyPI
+#   * manual "Run workflow"    -> builds only (no publish), for smoke testing
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build_wheels:
+    name: Wheels ${{ matrix.arch }}
+    runs-on: codebuild-sdk-runner-unitree-${{ matrix.arch == 'x86_64' && 'x86' || 'arm' }}-${{ github.run_id }}-${{ github.run_attempt }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Run cibuildwheel from the runner's own Python rather than the
+      # pypa/cibuildwheel action. The action bootstraps itself by running
+      # actions/setup-python to fetch Python 3.12, which fails on these
+      # self-hosted AWS CodeBuild runners (the version isn't in the toolcache or
+      # setup-python's manifest). cibuildwheel only needs ANY host interpreter
+      # >=3.8 to orchestrate; every target-version wheel is still built inside
+      # the manylinux Docker containers, so the host Python version is irrelevant.
+      - name: Build wheels
+        env:
+          CIBW_ARCHS_LINUX: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          PY="$(command -v python3 || command -v python)"
+          echo "Driving cibuildwheel with host interpreter: $PY ($("$PY" --version))"
+          # Isolated venv so we don't fight PEP 668 / the system site-packages.
+          "$PY" -m venv /tmp/cibw-venv
+          /tmp/cibw-venv/bin/python -m pip install --upgrade pip
+          # Pin the same cibuildwheel series the action used (2.21.x).
+          /tmp/cibw-venv/bin/python -m pip install "cibuildwheel==2.21.*"
+          /tmp/cibw-venv/bin/cibuildwheel --output-dir wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+
+  test_wheels:
+    # Install + import each wheel on its NATIVE architecture using a stock
+    # python:X-slim image (a modern glibc distro that satisfies the manylinux_2_31
+    # floor). Runs on the matching CodeBuild runner so aarch64 is tested natively.
+    name: Test ${{ matrix.arch }} py${{ matrix.python }}
+    needs: build_wheels
+    runs-on: codebuild-sdk-runner-unitree-${{ matrix.arch == 'x86_64' && 'x86' || 'arm' }}-${{ github.run_id }}-${{ github.run_attempt }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        python: ["3.8", "3.9", "3.10", "3.11"]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.arch }}
+          path: dist
+      - name: Install and import (native arch)
+        run: |
+          set -e
+          py="${{ matrix.python }}"; cp_tag="cp${py//./}"
+          whl=$(ls dist/far_unitree_sdk-*-${cp_tag}-${cp_tag}-manylinux*_${{ matrix.arch }}.whl | head -1)
+          echo "Testing $(basename "$whl") on python:${py}-slim (${{ matrix.arch }})"
+          docker run --rm -v "$PWD/dist:/wh:ro" "python:${py}-slim" \
+            bash -c "pip install -q /wh/$(basename "$whl") && python -c 'import unitree_interface; print(\"unitree_interface import OK\")'"
+
+  publish:
+    name: Publish to TestPyPI
+    needs: [build_wheels, test_wheels]
+    # Lightweight upload. Runs on the x86 CodeBuild runner (not a GitHub-hosted
+    # runner) so it works even if GitHub-hosted runners aren't enabled for the
+    # org — Trusted Publishing OIDC works identically from a CodeBuild runner.
+    runs-on: codebuild-sdk-runner-unitree-x86-${{ github.run_id }}-${{ github.run_attempt }}
+    # Only publish on a version tag, never on manual dispatch.
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: testpypi
+    permissions:
+      id-token: write  # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # All wheels are already manylinux-tagged by cibuildwheel/auditwheel.
+          packages-dir: dist
