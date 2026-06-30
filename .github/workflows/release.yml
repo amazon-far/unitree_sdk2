@@ -29,7 +29,7 @@ jobs:
       matrix:
         arch: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       # Run cibuildwheel from the runner's own Python rather than the
       # pypa/cibuildwheel action. The action bootstraps itself by running
@@ -52,7 +52,7 @@ jobs:
           /tmp/cibw-venv/bin/python -m pip install "cibuildwheel==2.21.*"
           /tmp/cibw-venv/bin/cibuildwheel --output-dir wheelhouse
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
@@ -70,7 +70,7 @@ jobs:
         arch: [x86_64, aarch64]
         python: ["3.8", "3.9", "3.10", "3.11"]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: wheels-${{ matrix.arch }}
           path: dist
@@ -84,7 +84,7 @@ jobs:
             bash -c "pip install -q /wh/$(basename "$whl") && python -c 'import unitree_interface; print(\"unitree_interface import OK\")'"
 
   publish:
-    name: Publish to TestPyPI
+    name: Publish to PyPI
     needs: [build_wheels, test_wheels]
     # Lightweight upload. Runs on the x86 CodeBuild runner (not a GitHub-hosted
     # runner) so it works even if GitHub-hosted runners aren't enabled for the
@@ -92,19 +92,18 @@ jobs:
     runs-on: codebuild-sdk-runner-unitree-x86-${{ github.run_id }}-${{ github.run_attempt }}
     # Only publish on a version tag, never on manual dispatch.
     if: startsWith(github.ref, 'refs/tags/v')
-    environment: testpypi
+    environment: pypi
     permissions:
       id-token: write  # required for Trusted Publishing (OIDC)
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
 
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
-          repository-url: https://test.pypi.org/legacy/
           # All wheels are already manylinux-tagged by cibuildwheel/auditwheel.
           packages-dir: dist
