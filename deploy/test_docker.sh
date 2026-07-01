@@ -11,7 +11,7 @@ fi
 
 CP_TAG="cp${PY_VER//./}"
 # Match the cibuildwheel/auditwheel output name, e.g.
-# far_unitree_sdk-0.1.3-cp311-cp311-manylinux_2_31_x86_64.whl
+# far_unitree_sdk-0.1.4-cp311-cp311-manylinux_2_31_x86_64.whl
 WHEEL_GLOB="far_unitree_sdk-*-${CP_TAG}-${CP_TAG}-manylinux*_${ARCH}.whl"
 
 echo "Testing wheel matching '$WHEEL_GLOB' on $ARCH with Python $PY_VER"

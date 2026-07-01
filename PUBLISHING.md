@@ -58,12 +58,12 @@ run — do this once per index.
 
 ```bash
 # Make sure pyproject.toml `version` is what you want to publish, then:
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 Pushing a `v*` tag triggers the workflow: it builds the full wheel matrix, then
-the `publish` job uploads to TestPyPI. A **manual** run (Actions → Run workflow)
+the `publish` job uploads to PyPI. A **manual** run (Actions → Run workflow)
 builds wheels only and does **not** publish — useful for smoke-testing.
 
 ## Verify from TestPyPI
