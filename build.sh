@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# NOTE: This builds local wheels tagged `linux_*` (not PyPI-publishable). For
+# PyPI, use the cibuildwheel GitHub Actions workflow instead — see PUBLISHING.md.
+
 # Detect architecture
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then

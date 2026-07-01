@@ -17,7 +17,7 @@ def test_import():
 def test_version():
     """Test version info."""
     try:
-        version = importlib.metadata.version('unitree_sdk2')
+        version = importlib.metadata.version('far-unitree-sdk')
         print(f"✓ Version: {version}")
         return True
     except Exception as e:

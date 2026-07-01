@@ -1,6 +1,24 @@
 # unitree_sdk2
 Unitree robot sdk version 2.
 
+### Python package (PyPI)
+
+The Python bindings are published to PyPI as **`far-unitree-sdk`** (the `far-`
+prefix avoids colliding with upstream Unitree packages). The import name is
+unchanged:
+
+```bash
+pip install far-unitree-sdk
+```
+
+```python
+import unitree_interface  # import name is unchanged
+```
+
+Wheels are prebuilt `manylinux` binaries (Python 3.8/3.9/3.10/3.11, x86_64 and
+aarch64) with the FastDDS runtime libraries bundled in — no compiler or system
+DDS install required.
+
 ### Prebuild environment
 * OS  (Ubuntu 20.04 LTS)  
 * CPU  (aarch64 and x86_64)   

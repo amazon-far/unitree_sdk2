@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# -----------------------------------------------------------------------------
+# DEPRECATED for publishing. Produces non-manylinux `linux_*` wheels named
+# `unitree_sdk2-*`, which PyPI rejects. The canonical, PyPI-ready build is now
+# GitHub Actions (.github/workflows/release.yml) via cibuildwheel, producing
+# `far_unitree_sdk-*-manylinux_2_31_*`. See PUBLISHING.md. Kept for local use.
+# -----------------------------------------------------------------------------
+
 # Change to repo root if running from deploy directory
 if [ "$(basename $(pwd))" = "deploy" ]; then
     cd ..

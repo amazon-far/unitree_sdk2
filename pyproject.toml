@@ -1,15 +1,81 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "unitree_sdk2"
+# PyPI distribution name. Prefixed with "far-" to avoid colliding with any
+# upstream Unitree project. The IMPORT name is unchanged: `import unitree_interface`.
+name = "far-unitree-sdk"
 version = "0.1.3"
-description = "Unitree robot SDK bindings"
-requires-python = ">=3.8"
+description = "Unitree robot SDK Python bindings (FAR fork)"
+readme = "README.md"
+# Binary-only distribution (no sdist fallback): every interpreter allowed here
+# MUST have a wheel built by [tool.cibuildwheel] below, or `pip install` fails
+# with no candidate. cibuildwheel builds cp38/cp39/cp310/cp311, so cap the upper
+# bound at <3.12 — an open-ended ">=3.8" would let pip pick 3.12/3.13 and find
+# no wheel.
+requires-python = ">=3.8,<3.12"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "FAR" }]
+keywords = ["unitree", "robotics", "sdk", "dds"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Developers",
+]
 
+[project.urls]
+Homepage = "https://github.com/amazon-far/unitree_sdk2"
+Repository = "https://github.com/amazon-far/unitree_sdk2"
+
+# The compiled extension module and vendored DDS .so files live in the
+# `unitree_interface` import package. Distribution name and import name are
+# intentionally different.
 [tool.setuptools.packages.find]
 include = ["unitree_interface"]
 
 [tool.setuptools.package-data]
-unitree_interface = ["unitree_interface.cpython-*.so", "libddsc.so*", "libddscxx.so*", "libfastcdr.so*", "libfastrtps.so*"]
+unitree_interface = ["*.so", "*.so.*", "*.pyi", "py.typed"]
+
+# ---------------------------------------------------------------------------
+# cibuildwheel: builds compliant manylinux wheels in CI.
+#
+# These projects do NOT compile during `pip wheel` — setuptools only packages a
+# prebuilt .so. So we compile the pybind11 module per-Python in `before-build`,
+# then auditwheel bundles the vendored FastDDS libraries found via
+# LD_LIBRARY_PATH and emits a properly tagged manylinux wheel.
+# ---------------------------------------------------------------------------
+[tool.cibuildwheel]
+build = "cp38-* cp39-* cp310-* cp311-*"
+# The vendored FastDDS libraries are prebuilt glibc binaries, so only build
+# manylinux wheels. musllinux (Alpine/musl) cannot link them and lacks glibc
+# headers like execinfo.h.
+skip = "*-musllinux*"
+build-frontend = "build"
+# Compile the extension for the active Python, then drop it into the package dir.
+before-build = "bash {project}/scripts/cibw_before_build.sh {project}"
+# NOTE: no `test-command` here. cibuildwheel runs Linux tests inside the build
+# container (manylinux_2_28, glibc 2.28), but these wheels target manylinux_2_31
+# (glibc 2.31) so pip would refuse to install them there. The wheels are instead
+# import-tested on ubuntu-latest by the `test_wheels` CI job after the build.
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+# unitree's vendored libs only require glibc 2.14 / GLIBCXX 3.4.26, so the
+# AlmaLinux 8 based manylinux_2_28 image is a safe build base.
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+# Point auditwheel + the loader at the vendored DDS libraries so they get
+# bundled into the wheel. The vendored dir names (x86_64/aarch64) match
+# `uname -m`; we list both and only the matching one exists at build time.
+# Inside the manylinux container the project is mounted at /project.
+environment = { LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:/project/thirdparty/lib/x86_64:/project/thirdparty/lib/aarch64:/project/lib/x86_64:/project/lib/aarch64" }
+# The vendored FastDDS libs require GLIBCXX_3.4.26 (Ubuntu 20.04 / glibc 2.31).
+# manylinux only ships AlmaLinux-based 2_28 and 2_34 images for x86_64/aarch64,
+# so auditwheel's default (the image's 2_28 policy) is too old and fails. Pin
+# the target tag to manylinux_2_31 explicitly. `uname -m` yields exactly the
+# x86_64 / aarch64 suffix manylinux uses, keeping this arch-agnostic.
+repair-wheel-command = "auditwheel repair --plat manylinux_2_31_$(uname -m) -w {dest_dir} {wheel}"
