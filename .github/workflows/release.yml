@@ -1,6 +1,6 @@
 name: Build & Publish wheels
 
-# Builds manylinux wheels with cibuildwheel and publishes them to (Test)PyPI
+# Builds manylinux wheels with cibuildwheel and publishes them to PyPI
 # using Trusted Publishing (OIDC) — no API tokens stored in the repo.
 #
 # Wheels are built on native per-arch AWS CodeBuild runners
@@ -12,7 +12,7 @@ name: Build & Publish wheels
 # expression maps the cibuildwheel arch to the runner project's name suffix.
 #
 # Triggers:
-#   * push a tag like v0.1.3   -> builds + publishes to TestPyPI
+#   * push a tag like v0.1.4   -> builds + publishes to PyPI
 #   * manual "Run workflow"    -> builds only (no publish), for smoke testing
 on:
   push:
@@ -68,7 +68,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x86_64, aarch64]
-        python: ["3.8", "3.9", "3.10", "3.11"]
+        python: ["3.8", "3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
