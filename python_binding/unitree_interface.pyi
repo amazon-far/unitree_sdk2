@@ -1,7 +1,7 @@
 """
 Type definitions for General Unitree Interface Python bindings
 """
-from typing import List, Any, Optional
+from typing import List, Any, Optional, overload
 from enum import Enum
 
 # Constants
@@ -18,21 +18,21 @@ GO2_GO2_CONFIG: RobotConfig
 
 class RobotType(Enum):
     """Robot types supported by the interface"""
-    G1: int      # G1 humanoid (29 motors)
-    H1: int      # H1 humanoid (19 motors)
-    H1_2: int    # H1-2 humanoid (29 motors)
-    GO2: int     # GO2 quadruped (12 motors)
-    CUSTOM: int  # Custom robot with specified motor count
+    G1 = ...      # G1 humanoid (29 motors)
+    H1 = ...      # H1 humanoid (19 motors)
+    H1_2 = ...    # H1-2 humanoid (29 motors)
+    GO2 = ...     # GO2 quadruped (12 motors)
+    CUSTOM = ...  # Custom robot with specified motor count
 
 class MessageType(Enum):
     """Message types for robot communication"""
-    HG: int   # Humanoid/Go1 message format
-    GO2: int  # Go2 message format
+    HG = ...   # Humanoid/Go1 message format
+    GO2 = ...  # Go2 message format
 
 class ControlMode(Enum):
     """Control mode for robots"""
-    PR: int  # Pitch/Roll mode
-    AB: int  # A/B mode
+    PR = ...  # Pitch/Roll mode
+    AB = ...  # A/B mode
 
 class RobotConfig:
     """Robot configuration structure"""
@@ -103,12 +103,13 @@ class LowState:
 
 class UnitreeInterface:
     """Main interface class for general Unitree robot control"""
-    
-    def __init__(self, network_interface: str, robot_type: RobotType, 
+
+    @overload
+    def __init__(self, network_interface: str, robot_type: RobotType,
                  message_type: MessageType) -> None:
         """
         Initialize UnitreeInterface with robot type and message type
-        
+
         Args:
             network_interface: Network interface name (e.g., "eth0", "enp2s0")
             robot_type: Type of robot (G1, H1, H1_2, GO2, CUSTOM)
@@ -116,21 +117,23 @@ class UnitreeInterface:
         """
         ...
 
+    @overload
     def __init__(self, network_interface: str, config: RobotConfig) -> None:
         """
         Initialize UnitreeInterface with robot configuration
-        
+
         Args:
             network_interface: Network interface name (e.g., "eth0", "enp2s0")
             config: Robot configuration
         """
         ...
 
-    def __init__(self, network_interface: str, robot_type: RobotType, 
+    @overload
+    def __init__(self, network_interface: str, robot_type: RobotType,
                  message_type: MessageType, num_motors: int) -> None:
         """
         Initialize UnitreeInterface with custom motor count
-        
+
         Args:
             network_interface: Network interface name (e.g., "eth0", "enp2s0")
             robot_type: Type of robot (G1, H1, H1_2, GO2, CUSTOM)
