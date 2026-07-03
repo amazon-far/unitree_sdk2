@@ -53,17 +53,36 @@ cp -v "thirdparty/lib/$ARCH/"*.so* unitree_interface/ 2>/dev/null || true
   [ -f libfastcdr.so ]  && ln -sf libfastcdr.so  libfastcdr.so.2     || true
 )
 
-# Generate type stubs (best-effort; never fail the build over stubs). Importing
-# the module requires its staged DDS deps on the loader path. Wrapped in `if` so
-# a stubgen/import failure is non-fatal under `set -e`.
-if PYTHONPATH="unitree_interface:${PYTHONPATH:-}" \
-   LD_LIBRARY_PATH="$PWD/unitree_interface:${LD_LIBRARY_PATH:-}" \
-   pybind11-stubgen -o "$BUILD_DIR/stubs" unitree_interface >/dev/null 2>&1; then
-    cp -v "$BUILD_DIR/stubs/unitree_interface.pyi" unitree_interface/ 2>/dev/null || true
+# Stage the type stub. The authoritative, hand-maintained stub lives at
+# python_binding/unitree_interface.pyi and is the source of truth for the public
+# API — prefer it so the wheel is reproducible and does not depend on
+# pybind11-stubgen succeeding inside the manylinux container (importing the freshly
+# linked extension there is fragile because of the vendored DDS .so deps).
+# pybind11-stubgen is only a fallback for a checkout that somehow lacks the committed
+# stub, and it must actually produce the file — no silent skip.
+if [ -f python_binding/unitree_interface.pyi ]; then
+    cp -v python_binding/unitree_interface.pyi unitree_interface/unitree_interface.pyi
+    echo "[before-build] staged committed stub python_binding/unitree_interface.pyi"
+elif PYTHONPATH="unitree_interface:${PYTHONPATH:-}" \
+     LD_LIBRARY_PATH="$PWD/unitree_interface:${LD_LIBRARY_PATH:-}" \
+     pybind11-stubgen -o "$BUILD_DIR/stubs" unitree_interface \
+     && [ -f "$BUILD_DIR/stubs/unitree_interface.pyi" ]; then
+    cp -v "$BUILD_DIR/stubs/unitree_interface.pyi" unitree_interface/unitree_interface.pyi
+    echo "[before-build] staged stubgen-generated stub"
 else
-    echo "[before-build] stub generation skipped (non-fatal)"
+    echo "[before-build] ERROR: no unitree_interface.pyi available (committed stub missing and stubgen failed)" >&2
+    exit 1
 fi
 
+# Ship py.typed ONLY alongside a real .pyi. A py.typed marker without a stub makes
+# mypy treat the compiled extension as a typed-but-empty module and report
+# `attr-defined` on every symbol downstream (exactly the holosoma CI break this
+# fixes) — worse than shipping no type info at all. Fail loudly rather than
+# regress that.
+if [ ! -f unitree_interface/unitree_interface.pyi ]; then
+    echo "[before-build] ERROR: refusing to write py.typed without a .pyi stub" >&2
+    exit 1
+fi
 touch unitree_interface/py.typed
 echo "[before-build] staged files:"
 ls -la unitree_interface/
