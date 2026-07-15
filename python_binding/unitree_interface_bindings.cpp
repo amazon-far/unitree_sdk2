@@ -59,7 +59,14 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def_readwrite("rx", &PyWirelessController::rx)
         .def_readwrite("ry", &PyWirelessController::ry)
         .def_readwrite("keys", &PyWirelessController::keys);
-    
+
+    py::class_<PyOdomState>(m, "OdomState")
+        .def(py::init<>())
+        .def_readwrite("position", &PyOdomState::position)
+        .def_readwrite("velocity", &PyOdomState::velocity)
+        .def_readwrite("yaw_speed", &PyOdomState::yaw_speed)
+        .def_readwrite("quat", &PyOdomState::quat);
+
     py::class_<PyLowState>(m, "LowState")
         .def(py::init<int>())
         .def_readwrite("imu", &PyLowState::imu)
@@ -84,6 +91,7 @@ PYBIND11_MODULE(unitree_interface, m) {
         // Python interface methods
         .def("read_low_state", &UnitreeInterface::ReadLowState)
         .def("read_wireless_controller", &UnitreeInterface::ReadWirelessController)
+        .def("read_odom_state", &UnitreeInterface::ReadOdomState)
         .def("write_low_command", static_cast<void(UnitreeInterface::*)(const PyMotorCommand&)>(&UnitreeInterface::WriteLowCommand))
         .def("set_control_mode", &UnitreeInterface::SetControlMode)
         .def("get_control_mode", &UnitreeInterface::GetControlMode)
@@ -96,7 +104,10 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def("publish_wireless_controller", &UnitreeInterface::PublishWirelessController,
              py::arg("controller"),
              "Publish wireless controller state (for simulation)")
-        
+        .def("publish_odom_state", &UnitreeInterface::PublishOdomState,
+             py::arg("odom"),
+             "Publish base odometry (SportModeState on rt/odommodestate, for simulation)")
+
         // Utility methods
         .def("create_zero_command", &UnitreeInterface::CreateZeroCommand)
         .def("get_default_kp", &UnitreeInterface::GetDefaultKp)

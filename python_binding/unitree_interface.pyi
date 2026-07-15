@@ -92,6 +92,15 @@ class WirelessController:
     def __init__(self) -> None: ...
     def __repr__(self) -> str: ...
 
+class OdomState:
+    """Base odometry (sport/loco-mode state estimate)"""
+    position: List[float]    # Base position [x, y, z] (3 elements)
+    velocity: List[float]    # Base velocity [vx, vy, vz] (3 elements)
+    yaw_speed: float         # Yaw rate [rad/s]
+    quat: List[float]        # Orientation quaternion [w, x, y, z] (4 elements)
+
+    def __init__(self) -> None: ...
+
 class LowState:
     """Complete robot low-level state"""
     imu: ImuState            # IMU state
@@ -154,9 +163,18 @@ class UnitreeInterface:
     def read_wireless_controller(self) -> WirelessController:
         """
         Read current wireless controller state
-        
+
         Returns:
             Current controller button and stick states
+        """
+        ...
+
+    def read_odom_state(self) -> OdomState:
+        """
+        Read current base odometry (sport/loco-mode state estimate)
+
+        Returns:
+            Base position, velocity, yaw rate, and orientation quaternion
         """
         ...
 
