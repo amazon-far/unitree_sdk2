@@ -34,6 +34,8 @@ UnitreeInterface::~UnitreeInterface() {
     lowcmd_publisher_.reset();
     lowstate_subscriber_.reset();
     wireless_subscriber_.reset();
+    odom_subscriber_.reset();
+    odom_publisher_.reset();
 }
 
 // Helper functions for robot configuration
@@ -171,7 +173,16 @@ void UnitreeInterface::InitializeDDS(const std::string& networkInterface) {
     wireless_publisher_ = std::make_shared<ChannelPublisher<unitree_go::msg::dds_::WirelessController_>>(TOPIC_JOYSTICK);
     auto wireless_pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::WirelessController_>>(wireless_publisher_);
     wireless_pub->InitChannel();
-    
+
+    // Odom (sport mode) state subscriber (same for both message types)
+    odom_subscriber_ = std::make_shared<ChannelSubscriber<unitree_go::msg::dds_::SportModeState_>>(TOPIC_ODOMMODESTATE);
+    auto odom_sub = std::static_pointer_cast<ChannelSubscriber<unitree_go::msg::dds_::SportModeState_>>(odom_subscriber_);
+    odom_sub->InitChannel(std::bind(&UnitreeInterface::OdomStateHandler, this, std::placeholders::_1), 1);
+
+    odom_publisher_ = std::make_shared<ChannelPublisher<unitree_go::msg::dds_::SportModeState_>>(TOPIC_ODOMMODESTATE);
+    auto odom_pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::SportModeState_>>(odom_publisher_);
+    odom_pub->InitChannel();
+
     // Create command writer thread
     command_writer_ptr_ = CreateRecurrentThreadEx(
         "command_writer", UT_CPU_ID_NONE, 2000, &UnitreeInterface::LowCommandWriter, this);
@@ -278,6 +289,18 @@ void UnitreeInterface::WirelessControllerHandler(const void *message) {
     wireless_controller_buffer_.SetData(controller_tmp);
 }
 
+void UnitreeInterface::OdomStateHandler(const void *message) {
+    unitree_go::msg::dds_::SportModeState_ odom_msg = *(const unitree_go::msg::dds_::SportModeState_ *)message;
+
+    PyOdomState odom_tmp;
+    odom_tmp.position = odom_msg.position();
+    odom_tmp.velocity = odom_msg.velocity();
+    odom_tmp.yaw_speed = odom_msg.yaw_speed();
+    odom_tmp.quat = odom_msg.imu_state().quaternion();
+
+    odom_state_buffer_.SetData(odom_tmp);
+}
+
 void UnitreeInterface::LowCommandWriter() {
     const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetData();
     if (!mc) {
@@ -378,6 +401,15 @@ PyWirelessController UnitreeInterface::ReadWirelessController() {
         return *controller;
     } else {
         return PyWirelessController{};
+    }
+}
+
+PyOdomState UnitreeInterface::ReadOdomState() {
+    const std::shared_ptr<const PyOdomState> odom = odom_state_buffer_.GetData();
+    if (odom) {
+        return *odom;
+    } else {
+        return PyOdomState{};
     }
 }
 
@@ -493,6 +525,18 @@ void UnitreeInterface::PublishWirelessController(const PyWirelessController& con
     
     auto pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::WirelessController_>>(wireless_publisher_);
     pub->Write(dds_controller);
+}
+
+void UnitreeInterface::PublishOdomState(const PyOdomState& odom) {
+    unitree_go::msg::dds_::SportModeState_ dds_odom;
+
+    dds_odom.position(odom.position);
+    dds_odom.velocity(odom.velocity);
+    dds_odom.yaw_speed(odom.yaw_speed);
+    dds_odom.imu_state().quaternion(odom.quat);
+
+    auto pub = std::static_pointer_cast<ChannelPublisher<unitree_go::msg::dds_::SportModeState_>>(odom_publisher_);
+    pub->Write(dds_odom);
 }
 
 void UnitreeInterface::PublishLowState(const PyLowState& state) {

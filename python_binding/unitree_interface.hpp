@@ -20,6 +20,7 @@
 #include <unitree/idl/go2/LowCmd_.hpp>
 #include <unitree/idl/go2/LowState_.hpp>
 #include <unitree/idl/go2/WirelessController_.hpp>
+#include <unitree/idl/go2/SportModeState_.hpp>
 
 #include "unitree/common/thread/thread.hpp"
 
@@ -32,6 +33,7 @@ static const std::string HG_STATE_TOPIC = "rt/lowstate";
 static const std::string GO2_CMD_TOPIC = "rt/lowcmd";
 static const std::string GO2_STATE_TOPIC = "rt/lowstate";
 static const std::string TOPIC_JOYSTICK = "rt/wirelesscontroller";
+static const std::string TOPIC_ODOMMODESTATE = "rt/odommodestate";
 
 // Robot configurations
 enum class RobotType {
@@ -128,6 +130,13 @@ struct PyWirelessController {
   uint16_t keys;
 };
 
+struct PyOdomState {
+  std::array<float, 3> position = {};
+  std::array<float, 3> velocity = {};
+  float yaw_speed = 0.0f;
+  std::array<float, 4> quat = {};
+};
+
 struct PyLowState {
   PyImuState imu;
   PyMotorState motor;
@@ -207,6 +216,7 @@ class UnitreeInterface {
   DataBuffer<MotorCommand> incoming_command_buffer_;
   DataBuffer<ImuState> imu_state_buffer_;
   DataBuffer<PyWirelessController> wireless_controller_buffer_;
+  DataBuffer<PyOdomState> odom_state_buffer_;
 
   // DDS components - using void pointers for type flexibility
   std::shared_ptr<void> lowcmd_publisher_;
@@ -215,6 +225,8 @@ class UnitreeInterface {
   std::shared_ptr<void> lowstate_subscriber_;
   std::shared_ptr<void> wireless_publisher_;
   std::shared_ptr<void> wireless_subscriber_;
+  std::shared_ptr<void> odom_subscriber_;
+  std::shared_ptr<void> odom_publisher_;
   
   ThreadPtr command_writer_ptr_;
   std::mutex wireless_mutex_;
@@ -226,6 +238,7 @@ class UnitreeInterface {
   void InitDefaultGains();
   void LowStateHandler(const void *message);
   void WirelessControllerHandler(const void *message);
+  void OdomStateHandler(const void *message);
   void LowCommandWriter();
   void IncomingLowCmdHandler(const void *message);
   
@@ -258,6 +271,7 @@ class UnitreeInterface {
   // Python interface methods
   PyLowState ReadLowState();
   PyWirelessController ReadWirelessController();
+  PyOdomState ReadOdomState();
   void WriteLowCommand(const PyMotorCommand& command);
   void SetControlMode(PyControlMode mode);
   PyControlMode GetControlMode() const;
@@ -266,6 +280,7 @@ class UnitreeInterface {
   void PublishLowState(const PyLowState& state);
   PyMotorCommand ReadIncomingCommand();
   void PublishWirelessController(const PyWirelessController& controller);
+  void PublishOdomState(const PyOdomState& odom);
   
   // Utility methods
   PyMotorCommand CreateZeroCommand();
