@@ -34,6 +34,8 @@ static const std::string GO2_CMD_TOPIC = "rt/lowcmd";
 static const std::string GO2_STATE_TOPIC = "rt/lowstate";
 static const std::string TOPIC_JOYSTICK = "rt/wirelesscontroller";
 static const std::string TOPIC_ODOMMODESTATE = "rt/odommodestate";
+// MotionSwitcher RPC (sim responder only): topics are derived by the SDK Server from the service
+// name "motion_switcher" (rt/api/motion_switcher/{request,response}); no explicit topic consts.
 
 // Robot configurations
 enum class RobotType {
@@ -227,7 +229,12 @@ class UnitreeInterface {
   std::shared_ptr<void> wireless_subscriber_;
   std::shared_ptr<void> odom_subscriber_;
   std::shared_ptr<void> odom_publisher_;
-  
+  // MotionSwitcher sim responder (opt-in; never on a real robot). Holds a unitree::robot::Server
+  // subclass as shared_ptr<void> (mirrors the other DDS members); an idempotency guard prevents a
+  // double-enable from starting two servers.
+  std::shared_ptr<void> motion_switcher_server_;
+  bool motion_switcher_enabled_ = false;
+
   ThreadPtr command_writer_ptr_;
   std::mutex wireless_mutex_;
 
@@ -281,6 +288,12 @@ class UnitreeInterface {
   PyMotorCommand ReadIncomingCommand();
   void PublishWirelessController(const PyWirelessController& controller);
   void PublishOdomState(const PyOdomState& odom);
+  // SIM ONLY: stand up a MotionSwitcher RPC responder so a process acting as a headless/fake
+  // robot answers the standard MotionSwitcher service (CheckMode/ReleaseMode) as a real robot
+  // would (e.g. reporting "no active mode"), satisfying clients that expect the service before
+  // taking control. Never enable on a real robot (it would race the robot's own MotionSwitcher
+  // server).
+  void EnableMotionSwitcherResponder();
   
   // Utility methods
   PyMotorCommand CreateZeroCommand();
