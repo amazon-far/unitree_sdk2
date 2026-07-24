@@ -178,6 +178,14 @@ class UnitreeInterface:
         """
         ...
 
+    def enable_motion_switcher_responder(self) -> None:
+        """
+        SIM ONLY: answer the Unitree MotionSwitcher RPC (CheckMode/ReleaseMode) as a real
+        robot would, so a simulated/headless robot can satisfy clients that expect the
+        MotionSwitcher service. Never enable on a real robot.
+        """
+        ...
+
     def write_low_command(self, command: MotorCommand) -> None:
         """
         Write motor command to robot

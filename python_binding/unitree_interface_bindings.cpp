@@ -107,6 +107,10 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def("publish_odom_state", &UnitreeInterface::PublishOdomState,
              py::arg("odom"),
              "Publish base odometry (SportModeState on rt/odommodestate, for simulation)")
+        .def("enable_motion_switcher_responder", &UnitreeInterface::EnableMotionSwitcherResponder,
+             "SIM ONLY: answer the Unitree MotionSwitcher RPC (CheckMode/ReleaseMode) as a real "
+             "robot would, so a simulated/headless robot can satisfy clients that expect the "
+             "MotionSwitcher service. Never enable on a real robot.")
 
         // Utility methods
         .def("create_zero_command", &UnitreeInterface::CreateZeroCommand)

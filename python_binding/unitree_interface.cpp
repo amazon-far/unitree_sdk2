@@ -3,6 +3,10 @@
 #include <unistd.h>
 #include <iomanip>
 
+// MotionSwitcher RPC responder (sim only): the SDK's generic service Server base class (same one
+// a real robot's motion_switcher service uses). Pulls in the reg-handler macros + Request/Response.
+#include <unitree/robot/server/server.hpp>
+
 // Constructor implementations
 UnitreeInterface::UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type)
     : config_(robot_type, message_type, GetDefaultMotorCount(robot_type), GetRobotName(robot_type, message_type)),
@@ -36,6 +40,7 @@ UnitreeInterface::~UnitreeInterface() {
     wireless_subscriber_.reset();
     odom_subscriber_.reset();
     odom_publisher_.reset();
+    motion_switcher_server_.reset();
 }
 
 // Helper functions for robot configuration
@@ -299,6 +304,81 @@ void UnitreeInterface::OdomStateHandler(const void *message) {
     odom_tmp.quat = odom_msg.imu_state().quaternion();
 
     odom_state_buffer_.SetData(odom_tmp);
+}
+
+// SIM ONLY: a MotionSwitcher service server that impersonates a real robot's motion_switcher.
+// Built on the SDK's own unitree::robot::Server (the same class a real robot service uses), so
+// the request/response channels, identity echo, status wrapping, api-version handshake, and
+// dispatch are handled by the SDK exactly as on hardware — we only supply the handlers.
+//
+// The api ids + JSON schema mirror unitree/robot/b2/motion_switcher/motion_switcher_api.hpp
+// (verified against JsonizeModeName): CheckMode returns {"name","form"} where an empty "name"
+// means "no high-level mode active"; a robot at rest reports exactly that. "form" is omitted
+// when empty, matching JsonizeModeName::toJson. SelectMode/ReleaseMode return an empty payload
+// with code 0. These constants match MOTION_SWITCHER_API_VERSION / _API_ID_* in that header.
+namespace {
+constexpr int32_t kMotionSwitcherCheckMode = 1001;
+constexpr int32_t kMotionSwitcherSelectMode = 1002;
+constexpr int32_t kMotionSwitcherReleaseMode = 1003;
+constexpr int32_t kMotionSwitcherSetSilent = 1004;
+constexpr int32_t kMotionSwitcherGetSilent = 1005;
+const char kMotionSwitcherServiceName[] = "motion_switcher";
+const char kMotionSwitcherApiVersion[] = "1.0.0.1";
+
+class MotionSwitcherSimServer : public unitree::robot::Server {
+ public:
+    MotionSwitcherSimServer() : unitree::robot::Server(kMotionSwitcherServiceName) {}
+
+    void Init() override {
+        SetApiVersion(kMotionSwitcherApiVersion);
+        // No lease: a real MotionSwitcher gates state-changing calls on a lease; the sim stub
+        // answers unconditionally so clients never block on lease acquisition.
+        UT_ROBOT_SERVER_REG_API_HANDLER_NO_LEASE(kMotionSwitcherCheckMode, &MotionSwitcherSimServer::HandleCheckMode);
+        UT_ROBOT_SERVER_REG_API_HANDLER_NO_LEASE(kMotionSwitcherSelectMode, &MotionSwitcherSimServer::HandleOk);
+        UT_ROBOT_SERVER_REG_API_HANDLER_NO_LEASE(kMotionSwitcherReleaseMode, &MotionSwitcherSimServer::HandleOk);
+        UT_ROBOT_SERVER_REG_API_HANDLER_NO_LEASE(kMotionSwitcherSetSilent, &MotionSwitcherSimServer::HandleOk);
+        UT_ROBOT_SERVER_REG_API_HANDLER_NO_LEASE(kMotionSwitcherGetSilent, &MotionSwitcherSimServer::HandleGetSilent);
+    }
+
+ private:
+    // CheckMode -> {"name":""} : no active high-level mode (form omitted, as the robot does when
+    // empty). The "name" key is emitted explicitly because strict C++ JsonizeModeName parsing
+    // requires it to be present even when the value is empty.
+    int32_t HandleCheckMode(const std::string& /*parameter*/, std::string& data) {
+        data = "{\"name\":\"\"}";
+        return 0;
+    }
+
+    // GetSilent -> {"silent":0} : mirror a robot reporting silent-mode off.
+    int32_t HandleGetSilent(const std::string& /*parameter*/, std::string& data) {
+        data = "{\"silent\":0}";
+        return 0;
+    }
+
+    // SelectMode / ReleaseMode / SetSilent : acknowledge success, empty payload.
+    int32_t HandleOk(const std::string& /*parameter*/, std::string& data) {
+        data = "";
+        return 0;
+    }
+};
+}  // namespace
+
+void UnitreeInterface::EnableMotionSwitcherResponder() {
+    if (motion_switcher_enabled_) {
+        return;
+    }
+    std::cout << "[SIM ONLY] MotionSwitcher responder enabled (fake robot answers CheckMode/"
+                 "ReleaseMode). Never enable this on a real robot." << std::endl;
+
+    // Shares the DDS domain/participant already initialized in InitializeDDS (ChannelFactory is a
+    // singleton). Server::Init registers the handlers + creates the rt/api/motion_switcher/
+    // request+response channels; Start() spins the request queue thread.
+    auto server = std::make_shared<MotionSwitcherSimServer>();
+    server->Init();
+    server->Start();
+    motion_switcher_server_ = server;
+
+    motion_switcher_enabled_ = true;
 }
 
 void UnitreeInterface::LowCommandWriter() {
