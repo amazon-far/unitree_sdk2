@@ -212,7 +212,11 @@ class UnitreeInterface {
   RobotConfig config_;
   PyControlMode mode_;
   uint8_t mode_machine_;
-  
+  // Monotonic controller tick from the latest LowState_. Written from the DDS
+  // callback thread in ProcessLowState and read in ConvertToPyLowState; a 32-bit
+  // aligned scalar so the race is benign (same lock-free pattern as mode_machine_).
+  uint32_t tick_ = 0;
+
   DataBuffer<MotorState> motor_state_buffer_;
   DataBuffer<MotorCommand> motor_command_buffer_;
   DataBuffer<MotorCommand> incoming_command_buffer_;

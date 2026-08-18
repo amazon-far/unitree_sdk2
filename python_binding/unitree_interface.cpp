@@ -244,7 +244,10 @@ void UnitreeInterface::ProcessLowState(const unitree_hg::msg::dds_::LowState_& l
     imu_tmp.quat = low_state.imu_state().quaternion();
     imu_tmp.accel = low_state.imu_state().accelerometer();
     imu_state_buffer_.SetData(imu_tmp);
-    
+
+    // Carry the controller tick through to Python (used for timing / staleness checks).
+    tick_ = low_state.tick();
+
     // Update mode machine
     if (mode_machine_ != low_state.mode_machine()) {
         if (mode_machine_ == 0) {
@@ -273,7 +276,10 @@ void UnitreeInterface::ProcessLowState(const unitree_go::msg::dds_::LowState_& l
     imu_tmp.quat = low_state.imu_state().quaternion();
     imu_tmp.accel = low_state.imu_state().accelerometer();
     imu_state_buffer_.SetData(imu_tmp);
-    
+
+    // Carry the controller tick through to Python (used for timing / staleness checks).
+    tick_ = low_state.tick();
+
     // GO2 doesn't have mode_machine, keep current value
     // mode_machine_ remains unchanged
 }
@@ -455,8 +461,9 @@ PyLowState UnitreeInterface::ConvertToPyLowState() {
         py_state.imu.accel = imu->accel;
     }
     
+    py_state.tick = tick_;
     py_state.mode_machine = mode_machine_;
-    
+
     return py_state;
 }
 
