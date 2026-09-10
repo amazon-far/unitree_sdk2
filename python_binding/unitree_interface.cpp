@@ -2,37 +2,159 @@
 #include <iostream>
 #include <unistd.h>
 #include <iomanip>
+#include <cstring>
+#include <exception>
+#include <stdexcept>
+#include <unordered_set>
+#include <vector>
+#include <dds/ddsrt/xmlparser.h>
+
+namespace {
+// Cyclone ignores nonmatching domain sections. Reject those before native init
+// rather than accidentally starting domain 0 with its default discovery policy.
+struct DdsXmlValidation {
+    int domains = 0;
+    bool domain_id = false;
+    // Attribute uniqueness is per element, not per domain or whole document.
+    std::vector<std::unordered_set<std::string>> attributes;
+    std::exception_ptr callback_error;
+};
+
+void ValidateDdsConfig(const std::string& xml) {
+    const auto start = xml.find_first_not_of(" \t\r\n");
+    if (xml.find('\0') != std::string::npos || start == std::string::npos || xml[start] != '<') {
+        throw std::invalid_argument("dds_config must be nonempty inline CycloneDDS XML (no filename, URI or BOM)");
+    }
+    DdsXmlValidation validation;
+    const ddsrt_xmlp_callbacks callbacks = {
+        [](void* arg, uintptr_t parent, uintptr_t* element, const char* name, int) -> int {
+            auto& state = *static_cast<DdsXmlValidation*>(arg);
+            if (parent == 0) {
+                if (std::strcmp(name, "CycloneDDS") != 0) return -1;
+                *element = 1;
+            } else if (parent == 1) {
+                if (std::strcmp(name, "Domain") != 0 || ++state.domains != 1) return -1;
+                *element = 2;
+            } else {
+                // Legacy <Id> elements must not bypass the domain attribute check.
+                if (parent == 2 && std::strcmp(name, "Id") == 0) return -1;
+                *element = 3;
+            }
+            try {
+                state.attributes.emplace_back();
+            } catch (...) {
+                // Return through the C parser so it can release temporary tokens.
+                state.callback_error = std::current_exception();
+                return -1;
+            }
+            return 0;
+        },
+        [](void* arg, uintptr_t element, const char* name, const char* value, int) -> int {
+            auto& state = *static_cast<DdsXmlValidation*>(arg);
+            try {
+                if (!state.attributes.back().insert(name).second) return -1;
+            } catch (...) {
+                state.callback_error = std::current_exception();
+                return -1;
+            }
+            if (element == 2 && std::strcmp(name, "Id") == 0) {
+                if (std::strcmp(value, "0") != 0 && std::strcmp(value, "any") != 0) return -1;
+                state.domain_id = true;
+            }
+            return 0;
+        },
+        [](void*, uintptr_t, const char*, int) -> int { return 0; },
+        [](void* arg, uintptr_t, int) -> int {
+            static_cast<DdsXmlValidation*>(arg)->attributes.pop_back();
+            return 0;
+        },
+        [](void*, const char*, int) {}
+    };
+    auto* parser = ddsrt_xmlp_new_string(xml.c_str(), &validation, &callbacks);
+    if (!parser) throw std::runtime_error("Could not allocate dds_config XML parser");
+    const int result = ddsrt_xmlp_parse(parser);
+    ddsrt_xmlp_free(parser);
+    if (validation.callback_error) std::rethrow_exception(validation.callback_error);
+    if (result < 0 || validation.domains != 1 || !validation.domain_id) {
+        throw std::invalid_argument("dds_config must be inline CycloneDDS XML with exactly one Domain Id=\"0\" or Id=\"any\"");
+    }
+}
+
+void InitializeChannelFactory(const std::string& nic, const std::optional<std::string>& xml) {
+    // ChannelFactory itself silently ignores reinitialization. All binding entry
+    // points share this guard, which outlives individual robot objects.
+    static std::mutex mutex;
+    static bool initialized = false;
+    static bool failed = false;
+    static std::optional<std::string> active_xml;
+    static std::string active_nic;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (failed) throw std::runtime_error("DDS initialization previously failed; start a fresh SDK process");
+    if (initialized) {
+        if (xml != active_xml || (!xml && nic != active_nic)) {
+            throw std::runtime_error("DDS already initialized with incompatible configuration; start a fresh SDK process");
+        }
+        return;
+    }
+    if (xml) ValidateDdsConfig(*xml);
+    // Save identity before init so allocation failures cannot leave an untracked
+    // live participant. Invalid XML above is retryable; native failure is not:
+    // the archive offers no transactional rollback of partially created entities.
+    active_xml = xml;
+    active_nic = nic;
+    try {
+        if (xml) {
+            // The archive recognizes inline XML only when Config starts with
+            // '<'. Remove XML whitespace only, retaining the original identity
+            // above and every element/attribute of the supplied document.
+            const JsonMap parameters{{UT_DDS_PARAM_KEY_DOMAINID, uint32_t(0)},
+                                     {UT_DDS_PARAM_KEY_CONFIG, xml->substr(xml->find_first_not_of(" \t\r\n"))}};
+            ChannelFactory::Instance()->Init(parameters);
+        } else {
+            ChannelFactory::Instance()->Init(0, nic);
+        }
+        initialized = true;
+    } catch (...) {
+        failed = true;
+        throw;
+    }
+}
+}  // namespace
 
 // MotionSwitcher RPC responder (sim only): the SDK's generic service Server base class (same one
 // a real robot's motion_switcher service uses). Pulls in the reg-handler macros + Request/Response.
 #include <unitree/robot/server/server.hpp>
 
 // Constructor implementations
-UnitreeInterface::UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type)
+UnitreeInterface::UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type, const std::optional<std::string>& dds_config)
     : config_(robot_type, message_type, GetDefaultMotorCount(robot_type), GetRobotName(robot_type, message_type)),
       mode_(PyControlMode::PR), mode_machine_(0) {
     
     InitDefaultGains();
-    InitializeDDS(networkInterface);
+    InitializeDDS(networkInterface, dds_config);
 }
 
-UnitreeInterface::UnitreeInterface(const std::string& networkInterface, const RobotConfig& config)
+UnitreeInterface::UnitreeInterface(const std::string& networkInterface, const RobotConfig& config, const std::optional<std::string>& dds_config)
     : config_(config), mode_(PyControlMode::PR), mode_machine_(0) {
     
     InitDefaultGains();
-    InitializeDDS(networkInterface);
+    InitializeDDS(networkInterface, dds_config);
 }
 
-UnitreeInterface::UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type, int num_motors)
+UnitreeInterface::UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type, int num_motors, const std::optional<std::string>& dds_config)
     : config_(robot_type, message_type, num_motors, GetRobotName(robot_type, message_type)),
       mode_(PyControlMode::PR), mode_machine_(0) {
     
     InitDefaultGains();
-    InitializeDDS(networkInterface);
+    InitializeDDS(networkInterface, dds_config);
 }
 
 UnitreeInterface::~UnitreeInterface() {
     if (command_writer_ptr_) {
+        // RecurrentThread::Wait requests quit and waits for the callback to
+        // finish. Its destructor alone frees the callable before cancelling
+        // the thread, which can race immediate construction/destruction.
+        command_writer_ptr_->Wait();
         command_writer_ptr_.reset();
     }
     lowcmd_publisher_.reset();
@@ -126,9 +248,8 @@ void UnitreeInterface::InitDefaultGains() {
     }
 }
 
-void UnitreeInterface::InitializeDDS(const std::string& networkInterface) {
-    // Initialize DDS
-    ChannelFactory::Instance()->Init(0, networkInterface);
+void UnitreeInterface::InitializeDDS(const std::string& networkInterface, const std::optional<std::string>& dds_config) {
+    InitializeChannelFactory(networkInterface, dds_config);
     
     // Create subscribers and publishers based on message type
     if (config_.message_type == MessageType::HG) {
@@ -195,7 +316,8 @@ void UnitreeInterface::InitializeDDS(const std::string& networkInterface) {
     std::cout << "UnitreeInterface initialized: " << config_.name 
               << " (" << config_.num_motors << " motors, " 
               << (config_.message_type == MessageType::HG ? "HG" : "GO2") << " messages)"
-              << " on interface: " << networkInterface << std::endl;
+              << (dds_config ? " with explicit DDS config" : " on interface: " + networkInterface)
+              << std::endl;
 }
 
 void UnitreeInterface::LowStateHandler(const void *message) {
@@ -680,22 +802,22 @@ void UnitreeInterface::PublishLowState(const PyLowState& state) {
 }
 
 // Static factory methods
-std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateG1(const std::string& networkInterface, MessageType message_type) {
-    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::G1, message_type);
+std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateG1(const std::string& networkInterface, MessageType message_type, const std::optional<std::string>& dds_config) {
+    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::G1, message_type, dds_config);
 }
 
-std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateH1(const std::string& networkInterface, MessageType message_type) {
-    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::H1, message_type);
+std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateH1(const std::string& networkInterface, MessageType message_type, const std::optional<std::string>& dds_config) {
+    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::H1, message_type, dds_config);
 }
 
-std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateH1_2(const std::string& networkInterface, MessageType message_type) {
-    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::H1_2, message_type);
+std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateH1_2(const std::string& networkInterface, MessageType message_type, const std::optional<std::string>& dds_config) {
+    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::H1_2, message_type, dds_config);
 }
 
-std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateGO2(const std::string& networkInterface, MessageType message_type) {
-    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::GO2, message_type);
+std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateGO2(const std::string& networkInterface, MessageType message_type, const std::optional<std::string>& dds_config) {
+    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::GO2, message_type, dds_config);
 }
 
-std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateCustom(const std::string& networkInterface, int num_motors, MessageType message_type) {
-    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::CUSTOM, message_type, num_motors);
+std::shared_ptr<UnitreeInterface> UnitreeInterface::CreateCustom(const std::string& networkInterface, int num_motors, MessageType message_type, const std::optional<std::string>& dds_config) {
+    return std::make_shared<UnitreeInterface>(networkInterface, RobotType::CUSTOM, message_type, num_motors, dds_config);
 }

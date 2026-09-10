@@ -84,9 +84,15 @@ PYBIND11_MODULE(unitree_interface, m) {
     // Main interface class
     py::class_<UnitreeInterface, std::shared_ptr<UnitreeInterface>>(m, "UnitreeInterface")
         // Constructors
-        .def(py::init<const std::string&, RobotType, MessageType>())
-        .def(py::init<const std::string&, const RobotConfig&>())
-        .def(py::init<const std::string&, RobotType, MessageType, int>())
+        .def(py::init<const std::string&, RobotType, MessageType, const std::optional<std::string>&>(),
+             py::arg("network_interface"), py::arg("robot_type"), py::arg("message_type"),
+             py::kw_only(), py::arg("dds_config") = py::none())
+        .def(py::init<const std::string&, const RobotConfig&, const std::optional<std::string>&>(),
+             py::arg("network_interface"), py::arg("config"),
+             py::kw_only(), py::arg("dds_config") = py::none())
+        .def(py::init<const std::string&, RobotType, MessageType, int, const std::optional<std::string>&>(),
+             py::arg("network_interface"), py::arg("robot_type"), py::arg("message_type"), py::arg("num_motors"),
+             py::kw_only(), py::arg("dds_config") = py::none())
         
         // Python interface methods
         .def("read_low_state", &UnitreeInterface::ReadLowState)
@@ -124,16 +130,16 @@ PYBIND11_MODULE(unitree_interface, m) {
         
         // Static factory methods
         .def_static("create_g1", &UnitreeInterface::CreateG1, 
-                   py::arg("network_interface"), py::arg("message_type") = MessageType::HG)
+                   py::arg("network_interface"), py::arg("message_type") = MessageType::HG, py::kw_only(), py::arg("dds_config") = py::none())
         .def_static("create_h1", &UnitreeInterface::CreateH1,
-                   py::arg("network_interface"), py::arg("message_type") = MessageType::GO2)
+                   py::arg("network_interface"), py::arg("message_type") = MessageType::GO2, py::kw_only(), py::arg("dds_config") = py::none())
         .def_static("create_h1_2", &UnitreeInterface::CreateH1_2,
-                   py::arg("network_interface"), py::arg("message_type") = MessageType::HG)
+                   py::arg("network_interface"), py::arg("message_type") = MessageType::HG, py::kw_only(), py::arg("dds_config") = py::none())
         .def_static("create_go2", &UnitreeInterface::CreateGO2,
-                   py::arg("network_interface"), py::arg("message_type") = MessageType::GO2)
+                   py::arg("network_interface"), py::arg("message_type") = MessageType::GO2, py::kw_only(), py::arg("dds_config") = py::none())
         .def_static("create_custom", &UnitreeInterface::CreateCustom,
                    py::arg("network_interface"), py::arg("num_motors"), 
-                   py::arg("message_type") = MessageType::HG);
+                   py::arg("message_type") = MessageType::HG, py::kw_only(), py::arg("dds_config") = py::none());
     
     // Predefined configurations (expose as module attributes since RobotConfigs is a namespace)
     m.attr("G1_HG_CONFIG") = RobotConfigs::G1_HG;
@@ -143,20 +149,22 @@ PYBIND11_MODULE(unitree_interface, m) {
     
     // Module-level functions for convenience
     m.def("create_robot", [](const std::string& network_interface, RobotType robot_type, 
-                            MessageType message_type = MessageType::HG) {
+                            MessageType message_type, const std::optional<std::string>& dds_config) {
         switch (robot_type) {
-            case RobotType::G1: return UnitreeInterface::CreateG1(network_interface, message_type);
-            case RobotType::H1: return UnitreeInterface::CreateH1(network_interface, message_type);
-            case RobotType::H1_2: return UnitreeInterface::CreateH1_2(network_interface, message_type);
-            case RobotType::GO2: return UnitreeInterface::CreateGO2(network_interface, message_type);
+            case RobotType::G1: return UnitreeInterface::CreateG1(network_interface, message_type, dds_config);
+            case RobotType::H1: return UnitreeInterface::CreateH1(network_interface, message_type, dds_config);
+            case RobotType::H1_2: return UnitreeInterface::CreateH1_2(network_interface, message_type, dds_config);
+            case RobotType::GO2: return UnitreeInterface::CreateGO2(network_interface, message_type, dds_config);
             default: throw std::runtime_error("Unknown robot type");
         }
-    }, py::arg("network_interface"), py::arg("robot_type"), py::arg("message_type") = MessageType::HG);
+    }, py::arg("network_interface"), py::arg("robot_type"), py::arg("message_type") = MessageType::HG, py::kw_only(), py::arg("dds_config") = py::none());
     
-    m.def("create_robot_with_config", [](const std::string& network_interface, const RobotConfig& config) {
-        return std::make_shared<UnitreeInterface>(network_interface, config);
-    }, py::arg("network_interface"), py::arg("config"));
+    m.def("create_robot_with_config", [](const std::string& network_interface, const RobotConfig& config, const std::optional<std::string>& dds_config) {
+        return std::make_shared<UnitreeInterface>(network_interface, config, dds_config);
+    }, py::arg("network_interface"), py::arg("config"), py::kw_only(), py::arg("dds_config") = py::none());
     
+    m.attr("DDS_CONFIG_API_VERSION") = 1;
+
     // Constants
     m.attr("G1_NUM_MOTOR") = 29;
     m.attr("H1_NUM_MOTOR") = 19;

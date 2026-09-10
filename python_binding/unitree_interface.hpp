@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <shared_mutex>
 
@@ -265,13 +266,13 @@ class UnitreeInterface {
   void WriteLowCommand(LowCmdType& low_cmd);
 
   // DDS initialization
-  void InitializeDDS(const std::string& networkInterface);
+  void InitializeDDS(const std::string& networkInterface, const std::optional<std::string>& dds_config);
 
  public:
   // Constructors
-  UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type);
-  UnitreeInterface(const std::string& networkInterface, const RobotConfig& config);
-  UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type, int num_motors);
+  UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type, const std::optional<std::string>& dds_config = std::nullopt);
+  UnitreeInterface(const std::string& networkInterface, const RobotConfig& config, const std::optional<std::string>& dds_config = std::nullopt);
+  UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type, int num_motors, const std::optional<std::string>& dds_config = std::nullopt);
   
   ~UnitreeInterface();
   
@@ -310,9 +311,9 @@ class UnitreeInterface {
   static std::string GetRobotName(RobotType robot_type, MessageType message_type);
   
   // Static factory methods
-  static std::shared_ptr<UnitreeInterface> CreateG1(const std::string& networkInterface, MessageType message_type = MessageType::HG);
-  static std::shared_ptr<UnitreeInterface> CreateH1(const std::string& networkInterface, MessageType message_type = MessageType::GO2);
-  static std::shared_ptr<UnitreeInterface> CreateH1_2(const std::string& networkInterface, MessageType message_type = MessageType::HG);
-  static std::shared_ptr<UnitreeInterface> CreateGO2(const std::string& networkInterface, MessageType message_type = MessageType::GO2);
-  static std::shared_ptr<UnitreeInterface> CreateCustom(const std::string& networkInterface, int num_motors, MessageType message_type = MessageType::HG);
+  static std::shared_ptr<UnitreeInterface> CreateG1(const std::string& networkInterface, MessageType message_type = MessageType::HG, const std::optional<std::string>& dds_config = std::nullopt);
+  static std::shared_ptr<UnitreeInterface> CreateH1(const std::string& networkInterface, MessageType message_type = MessageType::GO2, const std::optional<std::string>& dds_config = std::nullopt);
+  static std::shared_ptr<UnitreeInterface> CreateH1_2(const std::string& networkInterface, MessageType message_type = MessageType::HG, const std::optional<std::string>& dds_config = std::nullopt);
+  static std::shared_ptr<UnitreeInterface> CreateGO2(const std::string& networkInterface, MessageType message_type = MessageType::GO2, const std::optional<std::string>& dds_config = std::nullopt);
+  static std::shared_ptr<UnitreeInterface> CreateCustom(const std::string& networkInterface, int num_motors, MessageType message_type = MessageType::HG, const std::optional<std::string>& dds_config = std::nullopt);
 };
