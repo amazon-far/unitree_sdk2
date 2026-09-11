@@ -110,12 +110,14 @@ class LowState:
     def __init__(self, num_motors: int) -> None: ...
     def __repr__(self) -> str: ...
 
+DDS_CONFIG_API_VERSION: int
+
 class UnitreeInterface:
     """Main interface class for general Unitree robot control"""
 
     @overload
     def __init__(self, network_interface: str, robot_type: RobotType,
-                 message_type: MessageType) -> None:
+                 message_type: MessageType, *, dds_config: Optional[str] = None) -> None:
         """
         Initialize UnitreeInterface with robot type and message type
 
@@ -127,7 +129,7 @@ class UnitreeInterface:
         ...
 
     @overload
-    def __init__(self, network_interface: str, config: RobotConfig) -> None:
+    def __init__(self, network_interface: str, config: RobotConfig, *, dds_config: Optional[str] = None) -> None:
         """
         Initialize UnitreeInterface with robot configuration
 
@@ -139,7 +141,7 @@ class UnitreeInterface:
 
     @overload
     def __init__(self, network_interface: str, robot_type: RobotType,
-                 message_type: MessageType, num_motors: int) -> None:
+                 message_type: MessageType, num_motors: int, *, dds_config: Optional[str] = None) -> None:
         """
         Initialize UnitreeInterface with custom motor count
 
@@ -268,7 +270,7 @@ class UnitreeInterface:
         ...
 
     @staticmethod
-    def create_g1(network_interface: str, message_type: MessageType = MessageType.HG) -> 'UnitreeInterface':
+    def create_g1(network_interface: str, message_type: MessageType = MessageType.HG, *, dds_config: Optional[str] = None) -> 'UnitreeInterface':
         """
         Create G1 robot interface
         
@@ -282,7 +284,7 @@ class UnitreeInterface:
         ...
 
     @staticmethod
-    def create_h1(network_interface: str, message_type: MessageType = MessageType.GO2) -> 'UnitreeInterface':
+    def create_h1(network_interface: str, message_type: MessageType = MessageType.GO2, *, dds_config: Optional[str] = None) -> 'UnitreeInterface':
         """
         Create H1 robot interface
         
@@ -296,7 +298,7 @@ class UnitreeInterface:
         ...
 
     @staticmethod
-    def create_h1_2(network_interface: str, message_type: MessageType = MessageType.HG) -> 'UnitreeInterface':
+    def create_h1_2(network_interface: str, message_type: MessageType = MessageType.HG, *, dds_config: Optional[str] = None) -> 'UnitreeInterface':
         """
         Create H1-2 robot interface
         
@@ -310,7 +312,7 @@ class UnitreeInterface:
         ...
 
     @staticmethod
-    def create_go2(network_interface: str, message_type: MessageType = MessageType.GO2) -> 'UnitreeInterface':
+    def create_go2(network_interface: str, message_type: MessageType = MessageType.GO2, *, dds_config: Optional[str] = None) -> 'UnitreeInterface':
         """
         Create GO2 robot interface
         
@@ -325,7 +327,7 @@ class UnitreeInterface:
 
     @staticmethod
     def create_custom(network_interface: str, num_motors: int, 
-                     message_type: MessageType = MessageType.HG) -> 'UnitreeInterface':
+                     message_type: MessageType = MessageType.HG, *, dds_config: Optional[str] = None) -> 'UnitreeInterface':
         """
         Create custom robot interface
         
@@ -343,7 +345,7 @@ class UnitreeInterface:
 
 # Module-level functions
 def create_robot(network_interface: str, robot_type: RobotType, 
-                message_type: MessageType = MessageType.HG) -> UnitreeInterface:
+                message_type: MessageType = MessageType.HG, *, dds_config: Optional[str] = None) -> UnitreeInterface:
     """
     Create robot interface based on robot type
     
@@ -357,7 +359,7 @@ def create_robot(network_interface: str, robot_type: RobotType,
     """
     ...
 
-def create_robot_with_config(network_interface: str, config: RobotConfig) -> UnitreeInterface:
+def create_robot_with_config(network_interface: str, config: RobotConfig, *, dds_config: Optional[str] = None) -> UnitreeInterface:
     """
     Create robot interface with configuration
     

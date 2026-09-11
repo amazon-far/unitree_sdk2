@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 # PyPI distribution name. Prefixed with "far-" to avoid colliding with any
 # upstream Unitree project. The IMPORT name is unchanged: `import unitree_interface`.
 name = "far-unitree-sdk"
-version = "0.1.7"
+version = "0.1.8"
 description = "Unitree robot SDK Python bindings (FAR fork)"
 readme = "README.md"
 # Binary-only distribution (no sdist fallback): every interpreter allowed here
