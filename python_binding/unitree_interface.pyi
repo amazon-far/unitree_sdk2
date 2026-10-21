@@ -193,6 +193,16 @@ class UnitreeInterface:
         """
         ...
 
+    def publish_low_state(self, state: LowState) -> None:
+        """
+        SIM: publish a LowState on rt/lowstate (as a robot would).
+
+        Raises:
+            ValueError: on a G1 (HG) interface, any LowState.motor list shorter than the interface's motor
+                count. Longer lists are truncated to it.
+        """
+        ...
+
     def check_motion_mode(self, timeout_s: float = 1.0) -> Tuple[int, str, str]:
         """
         READ-ONLY. The MotionSwitcher's CheckMode (G1 / HG only).
@@ -202,7 +212,11 @@ class UnitreeInterface:
             mode owns the robot. On a nonzero code both strings are "".
 
         Raises:
-            ValueError: timeout_s <= 0. RuntimeError: not a G1 (HG) interface.
+            ValueError: timeout_s not in (0, 60]. RuntimeError: not a G1 (HG) interface.
+
+        The three mode queries share one lock, so with calls from several threads timeout_s bounds each call's own
+        wait, not the time spent queued behind another call (or behind the first call's client setup). Do not
+        call them from daemon threads that may still be running at interpreter exit.
         """
         ...
 

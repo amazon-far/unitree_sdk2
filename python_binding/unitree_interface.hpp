@@ -80,6 +80,13 @@ class DataBuffer {
     data = std::make_shared<T>(newData);
   }
 
+  // Move overload: a freshly built snapshot (HG low state: 11 per-motor vectors at ~500 Hz) is moved in, not copied.
+  void SetData(T &&newData) {
+    auto fresh = std::make_shared<T>(std::move(newData));
+    std::unique_lock<std::shared_mutex> lock(mutex);
+    data = std::move(fresh);
+  }
+
   std::shared_ptr<const T> GetData() {
     std::shared_lock<std::shared_mutex> lock(mutex);
     return data ? data : nullptr;
@@ -264,7 +271,7 @@ class UnitreeInterface {
   // double-enable from starting two servers.
   std::shared_ptr<void> motion_switcher_server_;
   bool motion_switcher_enabled_ = false;
-  // Read-only mode clients (CheckModeRead/GetSilentRead/GetLocoFsmIdRead), created on first use and kept, so
+  // Read-only mode clients (CheckMotionMode/GetSilentRead/GetLocoFsmIdRead), created on first use and kept, so
   // later calls do not wait for DDS discovery again. Held as shared_ptr<void> like the members above; the
   // mutex serializes calls (the SDK clients are not documented as thread-safe).
   std::shared_ptr<void> motion_switcher_client_;

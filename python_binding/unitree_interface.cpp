@@ -1,4 +1,5 @@
 #include "unitree_interface.hpp"
+#include <cmath>
 #include <iostream>
 #include <unistd.h>
 #include <iomanip>
@@ -373,7 +374,7 @@ void UnitreeInterface::ProcessLowState(const unitree_hg::msg::dds_::LowState_& l
     ms_tmp.version = low_state.version();
     ms_tmp.mode_pr = low_state.mode_pr();
     ms_tmp.reserve_message = low_state.reserve();
-    motor_state_buffer_.SetData(ms_tmp);
+    motor_state_buffer_.SetData(std::move(ms_tmp));
     
     // Get IMU state
     ImuState imu_tmp;
@@ -522,8 +523,9 @@ void UnitreeInterface::EnableMotionSwitcherResponder() {
 
 namespace {
 void CheckModeQueryArgs(const RobotConfig& config, float timeout_s) {
-    if (!(timeout_s > 0.0f)) {
-        throw std::invalid_argument("timeout_s must be > 0");
+    // NaN fails the comparison too; inf and huge values would overflow the SDK's conversion to microseconds.
+    if (!(timeout_s > 0.0f) || !std::isfinite(timeout_s) || timeout_s > 60.0f) {
+        throw std::invalid_argument("timeout_s must be > 0 and <= 60 seconds");
     }
     if (config.message_type != MessageType::HG) {
         throw std::runtime_error("mode queries are implemented for the G1 (MessageType.HG) only");
@@ -837,13 +839,15 @@ void UnitreeInterface::PublishOdomState(const PyOdomState& odom) {
 void UnitreeInterface::PublishLowState(const PyLowState& state) {
     if (config_.message_type == MessageType::HG) {
         // HG message type
-        // Every per-motor list is indexed up to num_motors below; a short list would read past its end.
+        // Every per-motor list is indexed up to num_motors below; a SHORT list would read past its end, so it is
+        // rejected. A longer list is truncated to the motor count, as before this change (e.g. LowState(35) on a
+        // 29-motor G1 keeps working).
         const size_t n = static_cast<size_t>(config_.num_motors);
         const auto& m = state.motor;
-        if (m.q.size() != n || m.dq.size() != n || m.ddq.size() != n || m.tau_est.size() != n ||
-            m.temperature.size() != n || m.voltage.size() != n || m.temperature_winding.size() != n ||
-            m.motorstate.size() != n || m.mode.size() != n || m.sensor.size() != n || m.reserve.size() != n) {
-            throw std::invalid_argument("publish_low_state: every LowState.motor list must have exactly " +
+        if (m.q.size() < n || m.dq.size() < n || m.ddq.size() < n || m.tau_est.size() < n ||
+            m.temperature.size() < n || m.voltage.size() < n || m.temperature_winding.size() < n ||
+            m.motorstate.size() < n || m.mode.size() < n || m.sensor.size() < n || m.reserve.size() < n) {
+            throw std::invalid_argument("publish_low_state: every LowState.motor list needs at least " +
                                         std::to_string(n) + " entries (the interface's motor count)");
         }
         unitree_hg::msg::dds_::LowState_ dds_state;
