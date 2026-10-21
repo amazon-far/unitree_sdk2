@@ -8,6 +8,7 @@
 #include <optional>
 #include <mutex>
 #include <shared_mutex>
+#include <tuple>
 
 // DDS
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -100,6 +101,7 @@ struct PyImuState {
   std::array<float, 3> omega = {};
   std::array<float, 4> quat = {};
   std::array<float, 3> accel = {};
+  int16_t temperature = 0;
 };
 
 struct PyMotorState {
@@ -109,9 +111,17 @@ struct PyMotorState {
   std::vector<float> tau_est;
   std::vector<int> temperature;
   std::vector<float> voltage;
+  // HG only (left zero for other message types): the rest of each MotorState_, in its wire types.
+  std::vector<int16_t> temperature_winding;
+  std::vector<uint32_t> motorstate;
+  std::vector<uint8_t> mode;
+  std::vector<std::array<uint32_t, 2>> sensor;
+  std::vector<std::array<uint32_t, 4>> reserve;
   
   PyMotorState(int num_motors) : q(num_motors), dq(num_motors), ddq(num_motors), 
-                                 tau_est(num_motors), temperature(num_motors), voltage(num_motors) {}
+                                 tau_est(num_motors), temperature(num_motors), voltage(num_motors),
+                                 temperature_winding(num_motors), motorstate(num_motors), mode(num_motors),
+                                 sensor(num_motors), reserve(num_motors) {}
 };
 
 struct PyMotorCommand {
@@ -145,6 +155,10 @@ struct PyLowState {
   PyMotorState motor;
   uint32_t tick = 0;
   uint8_t mode_machine = 0;
+  // HG only (left zero for other message types).
+  std::array<uint32_t, 2> version = {};
+  uint8_t mode_pr = 0;
+  std::array<uint32_t, 4> reserve = {};
   
   PyLowState(int num_motors) : motor(num_motors) {}
 };
@@ -160,6 +174,7 @@ struct ImuState {
   std::array<float, 3> omega = {};
   std::array<float, 4> quat = {};
   std::array<float, 3> accel = {};
+  int16_t temperature = 0;
 };
 
 struct MotorCommand {
@@ -180,9 +195,23 @@ struct MotorState {
   std::vector<float> tau_est;
   std::vector<int> temperature;
   std::vector<float> voltage;
+  std::vector<int16_t> temperature_winding;
+  std::vector<uint32_t> motorstate;
+  std::vector<uint8_t> mode;
+  std::vector<std::array<uint32_t, 2>> sensor;
+  std::vector<std::array<uint32_t, 4>> reserve;
+  // Message-level LowState_ fields (HG), carried in the same snapshot as the motors so one read never
+  // pairs one message's motor values with another message's tick/version/mode_pr/reserve. (Separate
+  // members, as mode_machine_ is, would race with the DDS thread and could tear the multi-word arrays.)
+  uint32_t tick = 0;
+  std::array<uint32_t, 2> version = {};
+  uint8_t mode_pr = 0;
+  std::array<uint32_t, 4> reserve_message = {};
   
   MotorState(int num_motors) : q(num_motors), dq(num_motors), ddq(num_motors), 
-                               tau_est(num_motors), temperature(num_motors), voltage(num_motors) {}
+                               tau_est(num_motors), temperature(num_motors), voltage(num_motors),
+                               temperature_winding(num_motors), motorstate(num_motors), mode(num_motors),
+                               sensor(num_motors), reserve(num_motors) {}
 };
 
 // CRC function
@@ -235,6 +264,12 @@ class UnitreeInterface {
   // double-enable from starting two servers.
   std::shared_ptr<void> motion_switcher_server_;
   bool motion_switcher_enabled_ = false;
+  // Read-only mode clients (CheckModeRead/GetSilentRead/GetLocoFsmIdRead), created on first use and kept, so
+  // later calls do not wait for DDS discovery again. Held as shared_ptr<void> like the members above; the
+  // mutex serializes calls (the SDK clients are not documented as thread-safe).
+  std::shared_ptr<void> motion_switcher_client_;
+  std::shared_ptr<void> loco_client_;
+  std::mutex mode_client_mutex_;
 
   ThreadPtr command_writer_ptr_;
   std::mutex wireless_mutex_;
@@ -295,6 +330,12 @@ class UnitreeInterface {
   // taking control. Never enable on a real robot (it would race the robot's own MotionSwitcher
   // server).
   void EnableMotionSwitcherResponder();
+  // READ-ONLY mode queries for the G1 (HG): the MotionSwitcher's CheckMode / GetSilent and the loco
+  // service's GetFsmId, the inputs FAR's classify_mode needs. Each returns the SDK return code unchanged
+  // (0 = success) and an empty value on failure. Nothing here can change the robot's mode.
+  std::tuple<int32_t, std::string, std::string> CheckMotionMode(float timeout_s);
+  std::tuple<int32_t, std::optional<bool>> GetSilentRead(float timeout_s);
+  std::tuple<int32_t, std::optional<int>> GetLocoFsmIdRead(float timeout_s);
   
   // Utility methods
   PyMotorCommand CreateZeroCommand();

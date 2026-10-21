@@ -1,7 +1,7 @@
 """
 Type definitions for General Unitree Interface Python bindings
 """
-from typing import List, Any, Optional, overload
+from typing import List, Any, Optional, Tuple, overload
 from enum import Enum
 
 # Constants
@@ -50,6 +50,7 @@ class ImuState:
     omega: List[float]    # Angular velocity [rad/s] (3 elements)
     quat: List[float]     # Quaternion [w, x, y, z] (4 elements) 
     accel: List[float]    # Linear acceleration [m/s^2] (3 elements)
+    temperature: int      # IMU temperature (HG only; 0 for other message types)
 
     def __init__(self) -> None: ...
     def __repr__(self) -> str: ...
@@ -58,9 +59,17 @@ class MotorState:
     """Motor state data for all joints"""
     q: List[float]           # Joint positions [rad] (variable length)
     dq: List[float]          # Joint velocities [rad/s] (variable length)
+    ddq: List[float]         # Joint accelerations [rad/s^2] (variable length; filled for HG)
     tau_est: List[float]     # Estimated joint torques [N*m] (variable length)
     temperature: List[int]   # Motor temperatures [°C] (variable length)
     voltage: List[float]     # Motor voltages [V] (variable length)
+    # HG only (0 for other message types). Like every list attribute here, reading returns a copy:
+    # assign whole lists (m.motorstate = [...]); element writes (m.motorstate[0] = x) are lost.
+    temperature_winding: List[int]   # Winding temperatures [°C]; `temperature` is the casing (variable length)
+    motorstate: List[int]            # Motor error word; 0 = no fault, bit meanings undocumented (variable length)
+    mode: List[int]                  # Motor mode byte (variable length)
+    sensor: List[List[int]]          # Raw sensor words, 2 per motor (variable length)
+    reserve: List[List[int]]         # Reserved words, 4 per motor (variable length)
 
     def __init__(self, num_motors: int) -> None: ...
     def __repr__(self) -> str: ...
@@ -106,6 +115,10 @@ class LowState:
     imu: ImuState            # IMU state
     motor: MotorState        # Motor state
     mode_machine: int        # Robot mode machine state
+    tick: int                # Controller message counter (HG; 0 for other message types)
+    version: List[int]       # Firmware/protocol version words (HG, 2 elements)
+    mode_pr: int             # Ankle control mode byte (HG), raw; 0 on the G1s observed
+    reserve: List[int]       # Reserved words (HG, 4 elements)
 
     def __init__(self, num_motors: int) -> None: ...
     def __repr__(self) -> str: ...
@@ -178,6 +191,27 @@ class UnitreeInterface:
         Returns:
             Base position, velocity, yaw rate, and orientation quaternion
         """
+        ...
+
+    def check_motion_mode(self, timeout_s: float = 1.0) -> Tuple[int, str, str]:
+        """
+        READ-ONLY. The MotionSwitcher's CheckMode (G1 / HG only).
+
+        Returns:
+            (code, form, name): code is the SDK return code (0 = success); name "" means no high-level
+            mode owns the robot. On a nonzero code both strings are "".
+
+        Raises:
+            ValueError: timeout_s <= 0. RuntimeError: not a G1 (HG) interface.
+        """
+        ...
+
+    def get_silent(self, timeout_s: float = 1.0) -> Tuple[int, Optional[bool]]:
+        """READ-ONLY. The MotionSwitcher's GetSilent: (code, silent); silent is None on a nonzero code."""
+        ...
+
+    def get_loco_fsm_id(self, timeout_s: float = 1.0) -> Tuple[int, Optional[int]]:
+        """READ-ONLY. The G1 loco service's GetFsmId: (code, fsm_id); fsm_id is None on a nonzero code."""
         ...
 
     def enable_motion_switcher_responder(self) -> None:
