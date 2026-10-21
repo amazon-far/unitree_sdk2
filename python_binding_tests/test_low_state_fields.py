@@ -1,11 +1,15 @@
 """Native binding tests for the G1 low-state fields; run only in network isolation.
 
-Written from g1-health/docs/BINDING_LOW_STATE_SPEC.md (revised 2026-10-16) alone, without reading the
-change under test. Test names carry the spec's "Required behaviour" number (test_reqN_...).
+Written from g1-health/docs/BINDING_LOW_STATE_SPEC.md (revised 2026-10-16, req 8 revised 2026-10-21) alone,
+without reading the change under test. Test names carry the spec's "Required behaviour" number (test_reqN_...).
 
 Each case runs in a fresh process because ChannelFactory owns process-wide DDS.
 No mocks: one interface on loopback publishes a LowState with publish_low_state()
 and reads it back with read_low_state(). Any "CRC Error" in a child's output fails the test.
+Because that round trip goes through the binding twice, a symmetric swap (the same two fields
+exchanged on publish and on read) would pass it. test_req1_raw_message_from_sdk_publisher_... closes
+that gap: a small C++ program compiled from the repository SDK publishes a raw unitree_hg LowState_
+with distinct known values per field, and read_low_state() must return exactly those values.
 
 Req 7 has no test here: it is checked by running both files in one run from the repo root,
   python -m unittest python_binding_tests/test_dds_config.py python_binding_tests/test_low_state_fields.py
@@ -29,9 +33,11 @@ Questions on the spec, and the interpretation these tests take (the least demand
       voltage, imu.quat/rpy/omega/accel and mode_machine.
   Q7. The spec does not say whether the existing motor.temperature (temperature[0]) must cover the full
       int16 range, so req 4 checks only the attributes it lists.
-  Q8. Req 8: if assigning a wrong-length per-motor list is itself rejected (TypeError/ValueError), no
-      such LowState can reach publish_low_state(); that is accepted. Wrong row lengths inside
-      sensor/reserve are not a motor-count mismatch and are not tested.
+  Q8. Req 8 (revised): if assigning a SHORTER per-motor list is itself rejected (TypeError/ValueError),
+      no such LowState can reach publish_low_state(); that is accepted. A LONGER list must be accepted at
+      assignment and by publish_low_state(), and read back as its first n entries; it is tested per
+      attribute and as a whole LowState(n + 6) (35 for the G1, the spec's example). Wrong row lengths
+      inside sensor/reserve are not a motor-count mismatch and are not tested.
   Q9. Req 9 lists examples ("e.g."); only the listed attributes are tested, and only at assignment.
       sensor, reserve, version and tick are not tested for out-of-range rejection.
   Q10. Req 5's single-publish test first republishes a different message until it arrives, so DDS
@@ -40,11 +46,25 @@ Questions on the spec, and the interpretation these tests take (the least demand
       one message; that is taken to still be "a single message published" for req 2.
   Q12. Tests assign whole lists and assign motor/imu back onto the state, because pybind's
       def_readwrite returns vectors and nested objects as copies.
+  Q13. The raw-message test assumes the robot's CRC convention as in the SDK's dev examples
+      (example/g1/low_level): Crc32Core over the LowState_ object's 32-bit words, excluding the last
+      (crc) word, with padding zeroed. If the binding checks the CRC another way, it drops the
+      message and the test fails with a "not read back" error.
+  Q14. The raw message fills all 35 motor slots; slots beyond the interface's motor count are out of
+      scope but are given distinct values, so a shifted index (slot i + 1 read as motor i) is caught.
+      IMU quat/omega/accel/rpy are mapped from the message's quaternion/gyroscope/accelerometer/rpy
+      and voltage from vol, as the existing attribute names imply.
 """
 import os
+from pathlib import Path
+import platform
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
 
 PRELUDE = '''
 import math
@@ -227,7 +247,137 @@ def publish_until(robot, n, v, keys, timeout=3.0):
 '''
 
 
+# Publishes one raw unitree_hg LowState_ on rt/lowstate at 100 Hz until its stdin closes.
+# Keep the values in step with RAW_EXPECTED below.
+RAW_PUBLISHER = r'''
+#include <unitree/robot/channel/channel_publisher.hpp>
+#include <unitree/idl/hg/LowState_.hpp>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
+#include <unistd.h>
+using unitree_hg::msg::dds_::LowState_;
+
+static uint32_t Crc32Core(const uint32_t* ptr, uint32_t len) {
+  uint32_t crc = 0xFFFFFFFF;
+  const uint32_t poly = 0x04c11db7;
+  for (uint32_t i = 0; i < len; i++) {
+    uint32_t xbit = 1u << 31, data = ptr[i];
+    for (uint32_t bits = 0; bits < 32; bits++) {
+      if (crc & 0x80000000) { crc <<= 1; crc ^= poly; } else { crc <<= 1; }
+      if (data & xbit) crc ^= poly;
+      xbit >>= 1;
+    }
+  }
+  return crc;
+}
+
+int main() {
+  std::thread([] {
+    char buf[64];
+    while (read(0, buf, sizeof buf) > 0) {}
+    std::_Exit(0);
+  }).detach();
+  static LowState_ msg;
+  std::memset(static_cast<void*>(&msg), 0, sizeof msg);
+  msg.version() = {0xA1000001u, 0xA2000002u};
+  msg.mode_pr() = 7;
+  msg.mode_machine() = 5;
+  msg.tick() = 0xFEDCBA98u;
+  auto& imu = msg.imu_state();
+  imu.quaternion() = {0.1f, 0.3f, 0.5f, 0.8062257748f};
+  imu.gyroscope() = {1.5f, -2.5f, 3.5f};
+  imu.accelerometer() = {0.25f, -9.75f, 1.125f};
+  imu.rpy() = {0.125f, -0.25f, 0.375f};
+  imu.temperature() = -1234;
+  for (uint32_t i = 0; i < 35; i++) {
+    auto& m = msg.motor_state()[i];
+    m.mode() = static_cast<uint8_t>(10 + i);
+    m.q() = i + 0.25f;
+    m.dq() = -(i + 0.5f);
+    m.ddq() = 2 * i + 0.125f;
+    m.tau_est() = -(3 * i + 0.375f);
+    m.temperature() = {static_cast<int16_t>(30 + i), static_cast<int16_t>(-(100 + static_cast<int>(i)))};
+    m.vol() = 20 + i + 0.5f;
+    m.sensor() = {0x11000000u + i, 0x12000000u + i};
+    m.motorstate() = 0x13000000u + i;
+    m.reserve() = {0x14000000u + i, 0x15000000u + i, 0x16000000u + i, 0xF7000000u + i};
+  }
+  msg.reserve() = {0xB1000001u, 0xB2000002u, 0xB3000003u, 0xF4000004u};
+  msg.crc() = Crc32Core(reinterpret_cast<const uint32_t*>(&msg), (sizeof(LowState_) >> 2) - 1);
+  unitree::robot::ChannelFactory::Instance()->Init(0, "lo");
+  unitree::robot::ChannelPublisher<LowState_> pub("rt/lowstate");
+  pub.InitChannel();
+  std::printf("ready\n");
+  std::fflush(stdout);
+  for (;;) {
+    pub.Write(msg);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+'''
+
+RAW_EXPECTED = '''
+def raw_expected(n):
+    r = range(n)
+    return {
+        "motor.mode": [10 + i for i in r],
+        "motor.q": [i + 0.25 for i in r],
+        "motor.dq": [-(i + 0.5) for i in r],
+        "motor.ddq": [2 * i + 0.125 for i in r],
+        "motor.tau_est": [-(3 * i + 0.375) for i in r],
+        "motor.temperature": [30 + i for i in r],
+        "motor.temperature_winding": [-(100 + i) for i in r],
+        "motor.voltage": [20 + i + 0.5 for i in r],
+        "motor.sensor": [[0x11000000 + i, 0x12000000 + i] for i in r],
+        "motor.motorstate": [0x13000000 + i for i in r],
+        "motor.reserve": [[0x14000000 + i, 0x15000000 + i, 0x16000000 + i, 0xF7000000 + i] for i in r],
+        "imu.quat": [0.1, 0.3, 0.5, 0.8062257748],
+        "imu.omega": [1.5, -2.5, 3.5],
+        "imu.accel": [0.25, -9.75, 1.125],
+        "imu.rpy": [0.125, -0.25, 0.375],
+        "imu.temperature": -1234,
+        "version": [0xA1000001, 0xA2000002],
+        "mode_pr": 7,
+        "mode_machine": 5,
+        "tick": 0xFEDCBA98,
+        "reserve": [0xB1000001, 0xB2000002, 0xB3000003, 0xF4000004],
+    }
+'''
+
+
 class LowStateFieldsNativeTest(unittest.TestCase):
+    raw_publisher = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.raw_publisher:
+            shutil.rmtree(Path(cls.raw_publisher).parent, ignore_errors=True)
+
+    @classmethod
+    def build_raw_publisher(cls):
+        if cls.raw_publisher:
+            return cls.raw_publisher
+        arch = platform.machine()
+        directory = Path(tempfile.mkdtemp(prefix='raw_lowstate_pub_'))
+        source, binary = directory / 'pub.cpp', directory / 'pub'
+        source.write_text(RAW_PUBLISHER)
+        libs = ROOT / 'thirdparty' / 'lib' / arch
+        compiler = shutil.which('g++') or shutil.which('c++')
+        if compiler is None:
+            raise AssertionError('no C++ compiler for the raw rt/lowstate publisher')
+        result = subprocess.run(
+            [compiler, '-std=c++17', '-O1', f'-I{ROOT / "include"}', f'-I{ROOT / "thirdparty/include"}',
+             f'-I{ROOT / "thirdparty/include/ddscxx"}', str(source), str(ROOT / 'lib' / arch / 'libunitree_sdk2.a'),
+             f'-L{libs}', '-lddscxx', '-lddsc', '-lpthread', f'-Wl,-rpath,{libs}', '-o', str(binary)],
+            capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            raise AssertionError('raw rt/lowstate publisher did not compile:\n' + result.stdout + result.stderr)
+        cls.raw_publisher = str(binary)
+        return cls.raw_publisher
+
     def run_native(self, body, env=None, timeout=25):
         result = subprocess.run([sys.executable, '-c', PRELUDE + body],
                                 capture_output=True, text=True, timeout=timeout,
@@ -448,28 +598,28 @@ for label, state in (("read", robot.read_low_state()), ("constructed", make_stat
     need(type(state.mode_machine) is int, f"{label} mode_machine: {type(state.mode_machine).__name__}")
 ''')
 
-    # 8. A per-motor list of the wrong length makes publish_low_state() raise ValueError and send nothing.
-    def test_req8_wrong_motor_count_raises_and_publishes_nothing(self):
+    # 8. A per-motor list SHORTER than the motor count makes publish_low_state() raise ValueError and
+    # send nothing; a LONGER one is accepted and truncated.
+    def test_req8_short_motor_list_raises_and_publishes_nothing(self):
         self.run_native('''
 robot, n = robot_and_n()
 a, b = values(n, 0), values(n, 1)
 publish_until(robot, n, a, NO_MODE_MACHINE)
 attempts = 0
 for key in MOTOR_ALL:
-    for size in (0, n - 1, n + 1):
+    for size in (0, n - 1):
         bad = dict(b)
-        bad[key] = (b[key] + [b[key][-1]]) if size > n else b[key][:size]
+        bad[key] = b[key][:size]
         try:
             state = make_state(n, bad)
         except (TypeError, ValueError):
             continue  # Q8: rejected already at assignment
         attempts += 1
         rejected(lambda: robot.publish_low_state(state), ValueError, f"{key} with {size} entries")
-for size in (n - 1, n + 1):
-    attempts += 1
-    whole = make_state(size, values(size, 1))
-    rejected(lambda: robot.publish_low_state(whole), ValueError, f"LowState({size})")
-print(f"{attempts} wrong-length publishes rejected")
+attempts += 1
+whole = make_state(n - 1, values(n - 1, 1))
+rejected(lambda: robot.publish_low_state(whole), ValueError, f"LowState({n - 1})")
+print(f"{attempts} short publishes rejected")
 deadline = time.monotonic() + 0.5
 while time.monotonic() < deadline:
     check(snapshot(robot.read_low_state(), NO_MODE_MACHINE), a, NO_MODE_MACHINE,
@@ -478,6 +628,64 @@ while time.monotonic() < deadline:
 # The channel is still live: a correct publish arrives.
 publish_until(robot, n, b, NO_MODE_MACHINE)
 ''')
+
+    def test_req8_long_motor_list_is_accepted_and_truncated(self):
+        self.run_native('''
+robot, n = robot_and_n()
+long_n = n + 6
+for seed, key in enumerate(MOTOR_ALL, start=2):
+    want = values(n, seed)
+    v = dict(want)
+    v[key] = values(long_n, seed)[key]
+    need(len(v[key]) == long_n)
+    try:
+        state = make_state(n, v)
+    except Exception as exc:
+        raise AssertionError(f"{key} with {long_n} entries rejected at assignment: {type(exc).__name__}: {exc}")
+    try:
+        robot.publish_low_state(state)
+    except Exception as exc:
+        raise AssertionError(f"publish_low_state with {key} of {long_n} entries raised {type(exc).__name__}: {exc}")
+    read = read_until(robot, want, NO_MODE_MACHINE, 3.0, publish=state)
+    for key2 in MOTOR_ALL:
+        need(len(read[key2]) == n, f"{key2}: length {len(read[key2])} after a long {key}, want {n}")
+seed = len(MOTOR_ALL) + 2
+whole = make_state(long_n, values(long_n, seed))
+try:
+    robot.publish_low_state(whole)
+except Exception as exc:
+    raise AssertionError(f"publish_low_state(LowState({long_n})) raised {type(exc).__name__}: {exc}")
+read_until(robot, values(n, seed), NO_MODE_MACHINE, 3.0, publish=whole)
+print(f"{len(MOTOR_ALL)} long attributes and LowState({long_n}) accepted and truncated to {n}")
+''')
+
+    # 1 and 6 without the round trip: a raw SDK message must map field by field.
+    def test_req1_raw_message_from_sdk_publisher_maps_every_field(self):
+        self.run_native(RAW_EXPECTED + '''
+import os
+import signal
+import subprocess
+robot, n = robot_and_n()
+want = raw_expected(n)
+pub = subprocess.Popen([os.environ["RAW_PUB"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                       text=True, start_new_session=True)
+try:
+    lines = []
+    for line in pub.stdout:
+        if line.strip() == "ready":
+            break
+        lines.append(line)
+    else:
+        raise AssertionError("raw publisher did not start:\\n" + "".join(lines))
+    read = read_until(robot, want, list(want), 3.0)
+    print("raw message read back:", {k: read[k] for k in ("tick", "mode_pr", "imu.temperature")})
+finally:
+    try:
+        os.killpg(pub.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    pub.wait()
+''', env={'RAW_PUB': self.build_raw_publisher()})
 
     # 9. Out-of-range values for the new integer attributes raise TypeError on assignment.
     def test_req9_out_of_range_assignment_raises_type_error(self):

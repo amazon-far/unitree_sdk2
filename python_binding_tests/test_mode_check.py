@@ -1,13 +1,19 @@
 """Native binding tests for the read-only G1 mode check; run only in network isolation.
 
-Written from g1-health/docs/BINDING_MODE_CHECK_SPEC.md (2026-10-16) alone, without reading the
-change under test. Test names carry the spec's "Required behaviour" number (test_reqN_...).
+Written from g1-health/docs/BINDING_MODE_CHECK_SPEC.md (reqs 2, 3 and 6 revised 2026-10-21) alone, without
+reading the change under test. Test names carry the spec's "Required behaviour" number (test_reqN_...);
+test_extra_... checks the test harness itself (helper processes cannot leak).
 
 Each case runs in a fresh process because ChannelFactory owns process-wide DDS.
 No mocks: the real extension on loopback ("lo", default DDS config, as in test_low_state_fields.py).
-Two cases also start helper processes on the same DDS domain: a second Python process running the
+Some cases also start helper processes on the same DDS domain: a second Python process running the
 binding's own MotionSwitcher responder (req 1), and a small C++ rt/lowcmd subscriber compiled once
 per run from the repository SDK (req 4). The binding has no documented Python rt/lowcmd subscriber.
+
+Helpers cannot outlive their test: each runs in its own process group with a pipe as stdin, exits
+as soon as that pipe closes (so also when the test child is killed or times out), and is killed by
+process group on every exit path. Every helper carries a per-run marker on its command line; each
+test starts by checking no marked helper is alive, and the class teardown checks it again.
 
 Req 7 has no test here: it is checked by running this file together with the two existing files,
   python -m unittest python_binding_tests/test_dds_config.py python_binding_tests/test_low_state_fields.py \
@@ -28,35 +34,58 @@ Questions on the spec, and the interpretation these tests take (the least demand
       bool); form/name str; silent bool; fsm_id int. On a nonzero code: "" / None exactly.
   Q5. Req 2/3 give only an upper bound. Returning a nonzero code early (before timeout_s) is accepted;
       no lower bound is tested. Elapsed time is measured around the Python call.
-  Q6. Req 3 "timeout_s <= 0 raises ValueError" is tested with 0, 0.0, -0.2 and -1, passed by keyword.
-      NaN/inf and non-number types are unspecified and not tested.
-  Q7. Req 4 "no new way to change the mode": the public UnitreeInterface names may only be the dev
+  Q6. Reqs 2 and 3 (revised) exclude the first call per method from their bounds; that first call
+      must still return nonzero/empty, without raising, within timeout_s + 10 s. Every later call must
+      return within timeout_s + 1.5 s. Req 2 is tested with the default and timeout_s = 0.5, 1.0 and 3.0;
+      3.0 is included because the stock SDK's own overshoot grows with the timeout: with no responder
+      MotionSwitcherClient alone, SetTimeout(t), returns after about t + min(0.54 t, 1.08) s (measured
+      2026-10-21, aarch64 container), which the revised 1.5 s margin covers for every timeout_s.
+  Q7. Req 3 ValueError: 0, 0.0, -0.2, -1, NaN, +inf, -inf, 60.001, 61 and 1e9, passed by keyword.
+      Exactly 60 is allowed by the wording but is not called (with no responder it would block 60 s).
+  Q8. Req 4 "no new way to change the mode": the public UnitreeInterface names may only be the dev
       build's names (taken from dir() of the compiled dev module, which has more methods than the dev
       stub, e.g. publish_low_state, read_incoming_command) plus the three new methods. Every public
       name in the module, and on every class in it, is also checked against mode/loco-changing words.
-  Q8. Req 4 rt/lowcmd: the dev binding publishes nothing on rt/lowcmd until write_low_command() is
+  Q9. Req 4 rt/lowcmd: the dev binding publishes nothing on rt/lowcmd until write_low_command() is
       called, and publishes continuously after it. So the test never calls write_low_command() before
       the mode-check calls, waits 1 s after construction for discovery (loopback), and requires zero
       messages from construction through the calls plus 0.5 s. A final write_low_command() must then be
       seen, proving the subscriber was matched; matching is assumed to have completed within that 1 s.
-  Q9. Req 5 is tested sequentially (publish, call, read back) for 20 calls, with and without the
-      responder. Calling from a second thread is not required by the spec and not tested.
-  Q10. Req 6: "created for the G1 (MessageType.HG)" is taken as every G1/HG constructor in the dev
+  Q10. Req 5 is tested sequentially (publish, call, read back) for 20 calls, with and without the
+      responder. Concurrent callers are covered by req 6's two-thread tests.
+  Q11. Req 6: "created for the G1 (MessageType.HG)" is taken as every G1/HG constructor in the dev
       stub (create_robot, UnitreeInterface with type or config, create_g1, create_robot_with_config).
+  Q12. Settled 2026-10-21: the rule is the message type, not the robot type (req 6 now reads "non-HG
+      message types"). RuntimeError is required for every method on the GO2-message interfaces
+      create_go2, create_h1 and create_g1(MessageType.GO2). HG robots other than the G1 (create_h1_2,
+      create_go2(HG), create_custom(29, HG)) talk to the same mode switcher, so making the RPC call is
+      correct for them; their outcome is printed and must be RuntimeError or a well-formed result
+      (no other exception, no crash).
+  Q13. GIL: with no responder, while get_silent(timeout_s=1) waits, a Python ticker thread sleeping
+      5 ms per step must never be starved for 0.25 s or more. The first call is made beforehand so
+      client creation is not inside the window.
+  Q14. Two threads calling at once: each result must have the right shape; with the responder every
+      result must be exactly the req 1 answer, with none, nonzero/empty within 0.2 + 1.5 s per call.
+      Calls may be serialised inside the binding; only results and the bound are checked.
 """
 import os
 from pathlib import Path
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+HELPER_MARK = f'modecheck-helper-{os.getpid()}'
 
 PRELUDE = '''
+import math
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -66,12 +95,17 @@ G1, HG = u.RobotType.G1, u.MessageType.HG
 NEW = ("check_motion_mode", "get_silent", "get_loco_fsm_id")
 EMPTY = {"check_motion_mode": ("", ""), "get_silent": (None,), "get_loco_fsm_id": (None,)}
 VALUE_TYPES = {"check_motion_mode": (str, str), "get_silent": (bool,), "get_loco_fsm_id": (int,)}
+ANSWER = {"check_motion_mode": (0, "", ""), "get_silent": (0, False)}
+BOUND = 0.2 + 1.5
+HELPER_MARK = os.environ["HELPER_MARK"]
+# Exits as soon as its stdin closes, i.e. when the process that started it goes away.
 RESPONDER = (
-    "import time, unitree_interface as u\\n"
+    "import os, sys, unitree_interface as u\\n"
     "r = u.create_robot('lo', u.RobotType.G1, u.MessageType.HG)\\n"
     "r.enable_motion_switcher_responder()\\n"
     "print('ready', flush=True)\\n"
-    "time.sleep(120)\\n")
+    "sys.stdin.read()\\n"
+    "os._exit(0)\\n")
 
 
 def need(cond, msg=""):
@@ -115,6 +149,20 @@ def call(r, name, **kw):
     return res, elapsed
 
 
+def fails_cleanly(r, name, bound, **kw):
+    """No responder: nonzero code and empty values within `bound` seconds."""
+    res, elapsed = call(r, name, **kw)
+    need(res[0] != 0, f"{name}({kw}) with no responder returned code 0: {res!r}")
+    need(elapsed < bound, f"{name}({kw}) took {elapsed:.3f}s, bound {bound}s")
+    return elapsed
+
+
+def warm(r, timeout_s=0.2):
+    """Q6: the untimed first call per method (client creation and discovery)."""
+    for name in NEW:
+        fails_cleanly(r, name, timeout_s + 10.0, timeout_s=timeout_s)
+
+
 def exactly(res, want):
     return res == want and all(type(a) is type(b) for a, b in zip(res, want))
 
@@ -130,43 +178,58 @@ def until_ok(r, name, timeout=5.0, **kw):
         time.sleep(0.05)
 
 
-def expect_responder_answers(r):
-    for name, want in (("check_motion_mode", (0, "", "")), ("get_silent", (0, False))):
+def expect_responder_answers(r, repeat=6):
+    for name, want in ANSWER.items():
         res = until_ok(r, name)
-        for i in range(6):
+        for i in range(repeat):
             need(exactly(res, want), f"{name} with responder, call {i}: {res!r}, want {want!r}")
             res, _ = call(r, name)
     call(r, "get_loco_fsm_id", timeout_s=0.2)  # Q3: shape only
 
 
-def start_responder_process():
-    p = subprocess.Popen([sys.executable, "-c", RESPONDER], stdout=subprocess.PIPE, text=True)
-    wait_ready(p, "responder process")
-    return p
+class Helper:
+    """A helper process in its own process group; it exits when its stdin closes."""
+
+    def __init__(self, argv, what):
+        self.what = what
+        self.p = subprocess.Popen(argv + [HELPER_MARK], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  text=True, start_new_session=True)
+        lines = []
+        for line in self.p.stdout:
+            if line.strip() == "ready":
+                return
+            lines.append(line)
+        self.stop()
+        raise AssertionError(f"{what} did not start, rc={self.p.returncode}:\\n" + "".join(lines))
+
+    def stop(self):
+        try:
+            os.killpg(self.p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self.p.wait()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stop()
 
 
-def wait_ready(p, what):
-    """Skip the SDK's own start-up lines until the helper prints "ready"."""
-    lines = []
-    for line in p.stdout:
-        if line.strip() == "ready":
-            return
-        lines.append(line)
-    p.kill()
-    raise AssertionError(f"{what} did not start, rc={p.wait()}:\\n" + "".join(lines))
+def responder_process():
+    return Helper([sys.executable, "-c", RESPONDER], "responder process")
 
 
-def start_lowcmd_counter():
-    """C++ rt/lowcmd subscriber; returns (process, count()), count = messages seen so far."""
-    p = subprocess.Popen([os.environ["LOWCMD_SUB"]], stdout=subprocess.PIPE, text=True)
-    wait_ready(p, "rt/lowcmd subscriber")
+def lowcmd_counter():
+    """C++ rt/lowcmd subscriber; returns (helper, count()), count = messages seen so far."""
+    h = Helper([os.environ["LOWCMD_SUB"]], "rt/lowcmd subscriber")
     seen = {"n": 0}
     def pump():
-        for out in p.stdout:
+        for out in h.p.stdout:
             if out.strip().isdigit():
                 seen["n"] = int(out)
     threading.Thread(target=pump, daemon=True).start()
-    return p, lambda: seen["n"]
+    return h, lambda: seen["n"]
 
 
 def make_state(n, k):
@@ -190,9 +253,27 @@ def read_back(r, n, k, timeout=3.0):
         need(time.monotonic() < deadline,
              f"low state {k} not read back within {timeout}s: q[:3]={list(motor.q)[:3]}")
         time.sleep(0.01)
+
+
+def in_threads(count, work):
+    """Run work(i) in `count` threads at once; re-raise the first failure."""
+    errors, start = [], threading.Barrier(count)
+    def run(i):
+        try:
+            start.wait()
+            work(i)
+        except BaseException as exc:
+            errors.append(f"thread {i}: {type(exc).__name__}: {exc}")
+    threads = [threading.Thread(target=run, args=(i,), daemon=True) for i in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+        need(not t.is_alive(), "a calling thread did not finish within 60 s (deadlock?)")
+    need(not errors, "\\n".join(errors))
 '''
 
-# Public UnitreeInterface names of the compiled dev module (Q7).
+# Public UnitreeInterface names of the compiled dev module (Q8).
 DEV_METHODS = [
     'create_custom', 'create_g1', 'create_go2', 'create_h1', 'create_h1_2', 'create_zero_command',
     'enable_motion_switcher_responder', 'get_config', 'get_control_mode', 'get_default_kd',
@@ -201,15 +282,23 @@ DEV_METHODS = [
     'read_wireless_controller', 'set_control_mode', 'write_low_command',
 ]
 
+# Exits as soon as its stdin closes, i.e. when the process that started it goes away.
 LOWCMD_SUBSCRIBER = r'''
 #include <unitree/robot/channel/channel_subscriber.hpp>
 #include <unitree/idl/hg/LowCmd_.hpp>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
+#include <unistd.h>
 static std::atomic<long> count{0};
 int main() {
+  std::thread([] {
+    char buf[64];
+    while (read(0, buf, sizeof buf) > 0) {}
+    std::_Exit(0);
+  }).detach();
   unitree::robot::ChannelFactory::Instance()->Init(0, "lo");
   unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowCmd_> sub("rt/lowcmd");
   sub.InitChannel([](const void*) { ++count; }, 1);
@@ -224,13 +313,47 @@ int main() {
 '''
 
 
+def live_helpers():
+    """PIDs of processes whose command line carries this run's helper marker."""
+    found = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            cmdline = (entry / 'cmdline').read_bytes().split(b'\0')
+        except OSError:
+            continue
+        if HELPER_MARK.encode() in cmdline:
+            found.append(int(entry.name))
+    return found
+
+
+def no_helpers_left(grace=3.0):
+    """Wait up to `grace` s for marked helpers to exit; kill and report any that remain."""
+    deadline = time.monotonic() + grace
+    while live_helpers() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    left = live_helpers()
+    for pid in left:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if left:
+        raise AssertionError(f'helper processes still running {grace}s after their test: {left}')
+
+
 class ModeCheckNativeTest(unittest.TestCase):
     lowcmd_sub = None
+
+    def setUp(self):
+        no_helpers_left()
 
     @classmethod
     def tearDownClass(cls):
         if cls.lowcmd_sub:
             shutil.rmtree(Path(cls.lowcmd_sub).parent, ignore_errors=True)
+        no_helpers_left()
 
     @classmethod
     def build_lowcmd_subscriber(cls):
@@ -257,9 +380,29 @@ class ModeCheckNativeTest(unittest.TestCase):
     def run_native(self, body, env=None, timeout=60):
         result = subprocess.run([sys.executable, '-c', PRELUDE + body],
                                 capture_output=True, text=True, timeout=timeout,
-                                env=dict(os.environ, **(env or {})))
+                                env=dict(os.environ, HELPER_MARK=HELPER_MARK, **(env or {})))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
+
+    # Helpers die with the process that started them, even when it is killed outright.
+    def test_extra_responder_exits_when_its_parent_is_killed(self):
+        child = subprocess.Popen([sys.executable, '-c', PRELUDE + '''
+h = responder_process()
+print("started", h.p.pid, flush=True)
+time.sleep(60)
+'''], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                 env=dict(os.environ, HELPER_MARK=HELPER_MARK))
+        try:
+            line = child.stdout.readline().split()
+            if line[:1] != ['started']:
+                raise AssertionError(f'child did not start a responder: {line!r}')
+            if int(line[1]) not in live_helpers():
+                raise AssertionError(f'responder {line[1]} not found by its marker; the leak check is blind')
+        finally:
+            child.kill()
+            child.wait()
+            child.stdout.close()
+        no_helpers_left()
 
     # 1. With the binding's own responder: (0, "", "") and (0, False).
     def test_req1_responder_on_same_interface(self):
@@ -278,43 +421,38 @@ expect_responder_answers(a)
 
     def test_req1_responder_in_other_process(self):
         self.run_native('''
-p = start_responder_process()
-try:
+with responder_process():
     expect_responder_answers(robot())
-finally:
-    p.kill()
-    p.wait()
 ''')
 
-    # 2. No responder: nonzero code, empty value, within timeout_s + 1 s, no exception.
+    # 2. No responder: nonzero code, empty value, no exception; after the first call, within timeout_s + 1.5 s.
     def test_req2_no_responder_fails_cleanly_within_bound(self):
         self.run_native('''
 r = robot()
+warm(r, timeout_s=1.0)
 for name in NEW:
-    for kw in ({}, {"timeout_s": 1.0}, {"timeout_s": 0.5}):
-        bound = kw.get("timeout_s", 1.0) + 1.0
-        res, elapsed = call(r, name, **kw)
-        need(res[0] != 0, f"{name}({kw}) with no responder returned code 0: {res!r}")
-        need(elapsed < bound, f"{name}({kw}) took {elapsed:.2f}s, bound {bound}s")
+    for kw in ({}, {"timeout_s": 1.0}, {"timeout_s": 0.5}, {"timeout_s": 3.0}):
+        fails_cleanly(r, name, kw.get("timeout_s", 1.0) + 1.5, **kw)
 ''')
 
-    # 3. timeout_s is honoured; timeout_s <= 0 raises ValueError.
+    # 3. timeout_s is honoured; invalid timeout_s raises ValueError.
     def test_req3_short_timeout_returns_quickly(self):
         self.run_native('''
 r = robot()
+warm(r)
+worst = 0.0
 for name in NEW:
     for i in range(3):
-        res, elapsed = call(r, name, timeout_s=0.2)
-        need(res[0] != 0, f"{name}(timeout_s=0.2) with no responder returned code 0: {res!r}")
-        need(elapsed < 1.2, f"{name}(timeout_s=0.2) call {i} took {elapsed:.2f}s, want < 1.2s")
+        worst = max(worst, fails_cleanly(r, name, BOUND, timeout_s=0.2))
+print(f"slowest timed call {worst:.3f}s")
 ''')
 
-    def test_req3_nonpositive_timeout_raises_value_error(self):
+    def test_req3_invalid_timeout_raises_value_error(self):
         self.run_native('''
 r = robot()
 for name in NEW:
     need(hasattr(r, name), f"UnitreeInterface has no {name}()")
-    for bad in (0, 0.0, -0.2, -1):
+    for bad in (0, 0.0, -0.2, -1, math.nan, math.inf, -math.inf, 60.001, 61, 1e9):
         rejected(lambda: getattr(r, name)(timeout_s=bad), ValueError, f"{name}(timeout_s={bad})")
     call(r, name, timeout_s=0.2)  # still usable afterwards
 ''')
@@ -344,13 +482,13 @@ need(not bad, f"mode-changing names exposed: {{bad}}")
 ''')
 
     LOWCMD_BODY = '''
-p, count = start_lowcmd_counter()
-try:
+h, count = lowcmd_counter()
+with h:
     r = robot()
     n = r.get_num_motors()
     if RESPONDER_ON:
         r.enable_motion_switcher_responder()
-    time.sleep(1.0)  # Q8: discovery
+    time.sleep(1.0)  # Q9: discovery
     need(count() == 0, f"{count()} rt/lowcmd messages before any call; cannot attribute messages")
     for _ in range(3):
         for name in NEW:
@@ -363,9 +501,6 @@ try:
     while count() == 0:
         need(time.monotonic() < deadline, "subscriber never saw write_low_command(); test inconclusive")
         time.sleep(0.02)
-finally:
-    p.kill()
-    p.wait()
 '''
 
     def test_req4_calls_send_nothing_on_lowcmd_without_responder(self):
@@ -404,7 +539,8 @@ for k in range(1, 21):
     def test_req5_low_state_round_trips_during_calls_with_responder(self):
         self.run_native('RESPONDER_ON = True\n' + self.LOWSTATE_BODY)
 
-    # 6. Works on every G1/HG interface.
+    # 6. Works on every G1/HG interface; other robot types raise RuntimeError (Q12); the GIL is released,
+    # repeated calls work, and two threads calling at once both get sane results.
     def test_req6_methods_work_on_g1_hg_interfaces(self):
         self.run_native('''
 robots = {
@@ -416,8 +552,102 @@ robots = {
 }
 for label, r in robots.items():
     for name in NEW:
-        res, elapsed = call(r, name, timeout_s=0.2)
-        need(elapsed < 1.2, f"{label}.{name}: {elapsed:.2f}s")
+        call(r, name, timeout_s=0.2)
+''')
+
+    def test_req6_non_hg_interface_raises_runtime_error(self):
+        self.run_native('''
+robots = {"create_go2": u.UnitreeInterface.create_go2("lo"), "create_h1": u.UnitreeInterface.create_h1("lo"),
+          "create_g1(GO2)": u.UnitreeInterface.create_g1("lo", u.MessageType.GO2)}
+for label, r in robots.items():
+    need(r.get_config().message_type == u.MessageType.GO2, f"{label}: not a GO2-message interface")
+    for name in NEW:
+        rejected(lambda: getattr(r, name)(timeout_s=0.2), RuntimeError, f"{label}.{name}")
+        rejected(lambda: getattr(r, name)(), RuntimeError, f"{label}.{name}() again")
+''')
+
+    def test_req6_non_g1_hg_interfaces_raise_runtime_error_or_answer(self):
+        # Q12: outcome printed, not prescribed.
+        self.run_native('''
+robots = {"create_h1_2": u.UnitreeInterface.create_h1_2("lo"),
+          "create_go2(HG)": u.UnitreeInterface.create_go2("lo", HG),
+          "create_custom(29, HG)": u.UnitreeInterface.create_custom("lo", 29, HG)}
+for label, r in robots.items():
+    for name in NEW:
+        try:
+            res, _ = call(r, name, timeout_s=0.2)
+        except AssertionError as exc:
+            if "raised RuntimeError" not in str(exc):
+                raise
+            print(f"{label}.{name}: RuntimeError")
+        else:
+            print(f"{label}.{name}: returned {res!r}")
+''')
+
+    def test_req6_gil_released_during_blocking_call(self):
+        self.run_native('''
+r = robot()
+warm(r)
+ticks, stop = [], threading.Event()
+def ticker():
+    while not stop.is_set():
+        ticks.append(time.monotonic())
+        time.sleep(0.005)
+t = threading.Thread(target=ticker, daemon=True)
+t.start()
+time.sleep(0.1)
+t0 = time.monotonic()
+res, elapsed = call(r, "get_silent", timeout_s=1.0)
+t1 = time.monotonic()
+stop.set()
+t.join()
+need(res[0] != 0, f"get_silent with no responder returned code 0: {res!r}")
+inside = [t0] + [x for x in ticks if t0 < x < t1] + [t1]
+gap = max(b - a for a, b in zip(inside, inside[1:]))
+print(f"call {elapsed:.3f}s, {len(inside) - 2} ticks inside, longest gap {gap:.3f}s")
+need(gap < 0.25, f"ticker thread starved for {gap:.3f}s during a {elapsed:.3f}s get_silent call: "
+                 "the GIL is held while the call waits")
+''')
+
+    def test_req6_repeated_calls_reuse_clients(self):
+        self.run_native('''
+r = robot()
+warm(r)
+for name in NEW:
+    for i in range(10):
+        fails_cleanly(r, name, BOUND, timeout_s=0.2)
+r.enable_motion_switcher_responder()
+for name, want in ANSWER.items():
+    until_ok(r, name)
+    for i in range(50):
+        res, _ = call(r, name)
+        need(exactly(res, want), f"{name} call {i} after 10 failed calls: {res!r}, want {want!r}")
+''')
+
+    def test_req6_two_threads_calling_at_once_without_responder(self):
+        self.run_native('''
+r = robot()
+warm(r)
+def work(i):
+    for k in range(3):
+        for name in NEW:
+            fails_cleanly(r, name, BOUND, timeout_s=0.2)
+in_threads(2, work)
+''')
+
+    def test_req6_two_threads_calling_at_once_with_responder(self):
+        self.run_native('''
+r = robot()
+r.enable_motion_switcher_responder()
+for name in ANSWER:
+    until_ok(r, name)
+def work(i):
+    for k in range(20):
+        for name, want in ANSWER.items():
+            res, _ = call(r, name)
+            need(exactly(res, want), f"{name} call {k}: {res!r}, want {want!r}")
+        call(r, "get_loco_fsm_id", timeout_s=0.2)
+in_threads(2, work)
 ''')
 
 
