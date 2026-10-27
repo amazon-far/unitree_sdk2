@@ -33,7 +33,8 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def_readwrite("rpy", &PyImuState::rpy)
         .def_readwrite("omega", &PyImuState::omega)
         .def_readwrite("quat", &PyImuState::quat)
-        .def_readwrite("accel", &PyImuState::accel);
+        .def_readwrite("accel", &PyImuState::accel)
+        .def_readwrite("temperature", &PyImuState::temperature);
     
     py::class_<PyMotorState>(m, "MotorState")
         .def(py::init<int>())
@@ -42,7 +43,12 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def_readwrite("ddq", &PyMotorState::ddq)
         .def_readwrite("tau_est", &PyMotorState::tau_est)
         .def_readwrite("temperature", &PyMotorState::temperature)
-        .def_readwrite("voltage", &PyMotorState::voltage);
+        .def_readwrite("voltage", &PyMotorState::voltage)
+        .def_readwrite("temperature_winding", &PyMotorState::temperature_winding)
+        .def_readwrite("motorstate", &PyMotorState::motorstate)
+        .def_readwrite("mode", &PyMotorState::mode)
+        .def_readwrite("sensor", &PyMotorState::sensor)
+        .def_readwrite("reserve", &PyMotorState::reserve);
     
     py::class_<PyMotorCommand>(m, "MotorCommand")
         .def(py::init<int>())
@@ -72,7 +78,10 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def_readwrite("imu", &PyLowState::imu)
         .def_readwrite("motor", &PyLowState::motor)
         .def_readwrite("tick", &PyLowState::tick)
-        .def_readwrite("mode_machine", &PyLowState::mode_machine);
+        .def_readwrite("mode_machine", &PyLowState::mode_machine)
+        .def_readwrite("version", &PyLowState::version)
+        .def_readwrite("mode_pr", &PyLowState::mode_pr)
+        .def_readwrite("reserve", &PyLowState::reserve);
     
     py::class_<RobotConfig>(m, "RobotConfig")
         .def(py::init<RobotType, MessageType, int, const std::string&>())
@@ -113,6 +122,16 @@ PYBIND11_MODULE(unitree_interface, m) {
         .def("publish_odom_state", &UnitreeInterface::PublishOdomState,
              py::arg("odom"),
              "Publish base odometry (SportModeState on rt/odommodestate, for simulation)")
+        .def("check_motion_mode", &UnitreeInterface::CheckMotionMode, py::arg("timeout_s") = 1.0f,
+             py::call_guard<py::gil_scoped_release>(),
+             "READ-ONLY. MotionSwitcher CheckMode: (code, form, name); code 0 = success, name '' = no "
+             "high-level mode owns the robot. On failure the strings are empty.")
+        .def("get_silent", &UnitreeInterface::GetSilentRead, py::arg("timeout_s") = 1.0f,
+             py::call_guard<py::gil_scoped_release>(),
+             "READ-ONLY. MotionSwitcher GetSilent: (code, silent); silent is None on failure.")
+        .def("get_loco_fsm_id", &UnitreeInterface::GetLocoFsmIdRead, py::arg("timeout_s") = 1.0f,
+             py::call_guard<py::gil_scoped_release>(),
+             "READ-ONLY. G1 loco GetFsmId: (code, fsm_id); fsm_id is None on failure.")
         .def("enable_motion_switcher_responder", &UnitreeInterface::EnableMotionSwitcherResponder,
              "SIM ONLY: answer the Unitree MotionSwitcher RPC (CheckMode/ReleaseMode) as a real "
              "robot would, so a simulated/headless robot can satisfy clients that expect the "

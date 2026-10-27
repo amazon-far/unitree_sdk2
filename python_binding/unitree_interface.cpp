@@ -1,4 +1,5 @@
 #include "unitree_interface.hpp"
+#include <cmath>
 #include <iostream>
 #include <unistd.h>
 #include <iomanip>
@@ -124,6 +125,9 @@ void InitializeChannelFactory(const std::string& nic, const std::optional<std::s
 // MotionSwitcher RPC responder (sim only): the SDK's generic service Server base class (same one
 // a real robot's motion_switcher service uses). Pulls in the reg-handler macros + Request/Response.
 #include <unitree/robot/server/server.hpp>
+// Read-only mode queries: the SDK's own MotionSwitcher and G1 loco clients.
+#include <unitree/robot/b2/motion_switcher/motion_switcher_client.hpp>
+#include <unitree/robot/g1/loco/g1_loco_client.hpp>
 
 // Constructor implementations
 UnitreeInterface::UnitreeInterface(const std::string& networkInterface, RobotType robot_type, MessageType message_type, const std::optional<std::string>& dds_config)
@@ -163,6 +167,8 @@ UnitreeInterface::~UnitreeInterface() {
     odom_subscriber_.reset();
     odom_publisher_.reset();
     motion_switcher_server_.reset();
+    motion_switcher_client_.reset();
+    loco_client_.reset();
 }
 
 // Helper functions for robot configuration
@@ -356,8 +362,19 @@ void UnitreeInterface::ProcessLowState(const unitree_hg::msg::dds_::LowState_& l
         ms_tmp.tau_est[i] = low_state.motor_state()[i].tau_est();
         ms_tmp.temperature[i] = low_state.motor_state()[i].temperature()[0];
         ms_tmp.voltage[i] = low_state.motor_state()[i].vol();
+        // The rest of each MotorState_, so Python sees what rt/lowstate carries.
+        ms_tmp.ddq[i] = low_state.motor_state()[i].ddq();
+        ms_tmp.temperature_winding[i] = low_state.motor_state()[i].temperature()[1];
+        ms_tmp.motorstate[i] = low_state.motor_state()[i].motorstate();
+        ms_tmp.mode[i] = low_state.motor_state()[i].mode();
+        ms_tmp.sensor[i] = low_state.motor_state()[i].sensor();
+        ms_tmp.reserve[i] = low_state.motor_state()[i].reserve();
     }
-    motor_state_buffer_.SetData(ms_tmp);
+    ms_tmp.tick = low_state.tick();
+    ms_tmp.version = low_state.version();
+    ms_tmp.mode_pr = low_state.mode_pr();
+    ms_tmp.reserve_message = low_state.reserve();
+    motor_state_buffer_.SetData(std::move(ms_tmp));
     
     // Get IMU state
     ImuState imu_tmp;
@@ -365,6 +382,7 @@ void UnitreeInterface::ProcessLowState(const unitree_hg::msg::dds_::LowState_& l
     imu_tmp.rpy = low_state.imu_state().rpy();
     imu_tmp.quat = low_state.imu_state().quaternion();
     imu_tmp.accel = low_state.imu_state().accelerometer();
+    imu_tmp.temperature = low_state.imu_state().temperature();
     imu_state_buffer_.SetData(imu_tmp);
     
     // Update mode machine
@@ -503,6 +521,72 @@ void UnitreeInterface::EnableMotionSwitcherResponder() {
     motion_switcher_enabled_ = true;
 }
 
+namespace {
+void CheckModeQueryArgs(const RobotConfig& config, float timeout_s) {
+    // NaN fails the comparison too; inf and huge values would overflow the SDK's conversion to microseconds.
+    if (!(timeout_s > 0.0f) || !std::isfinite(timeout_s) || timeout_s > 60.0f) {
+        throw std::invalid_argument("timeout_s must be > 0 and <= 60 seconds");
+    }
+    if (config.message_type != MessageType::HG) {
+        throw std::runtime_error("mode queries are implemented for the G1 (MessageType.HG) only");
+    }
+}
+}  // namespace
+
+std::tuple<int32_t, std::string, std::string> UnitreeInterface::CheckMotionMode(float timeout_s) {
+    CheckModeQueryArgs(config_, timeout_s);
+    std::lock_guard<std::mutex> lock(mode_client_mutex_);
+    if (!motion_switcher_client_) {
+        auto client = std::make_shared<unitree::robot::b2::MotionSwitcherClient>();
+        client->Init();
+        motion_switcher_client_ = client;
+    }
+    auto* client = static_cast<unitree::robot::b2::MotionSwitcherClient*>(motion_switcher_client_.get());
+    client->SetTimeout(timeout_s);
+    std::string form, name;
+    const int32_t code = client->CheckMode(form, name);
+    if (code != 0) {
+        return {code, "", ""};
+    }
+    return {code, form, name};
+}
+
+std::tuple<int32_t, std::optional<bool>> UnitreeInterface::GetSilentRead(float timeout_s) {
+    CheckModeQueryArgs(config_, timeout_s);
+    std::lock_guard<std::mutex> lock(mode_client_mutex_);
+    if (!motion_switcher_client_) {
+        auto client = std::make_shared<unitree::robot::b2::MotionSwitcherClient>();
+        client->Init();
+        motion_switcher_client_ = client;
+    }
+    auto* client = static_cast<unitree::robot::b2::MotionSwitcherClient*>(motion_switcher_client_.get());
+    client->SetTimeout(timeout_s);
+    bool silent = false;
+    const int32_t code = client->GetSilent(silent);
+    if (code != 0) {
+        return {code, std::nullopt};
+    }
+    return {code, silent};
+}
+
+std::tuple<int32_t, std::optional<int>> UnitreeInterface::GetLocoFsmIdRead(float timeout_s) {
+    CheckModeQueryArgs(config_, timeout_s);
+    std::lock_guard<std::mutex> lock(mode_client_mutex_);
+    if (!loco_client_) {
+        auto client = std::make_shared<unitree::robot::g1::LocoClient>();
+        client->Init();
+        loco_client_ = client;
+    }
+    auto* client = static_cast<unitree::robot::g1::LocoClient*>(loco_client_.get());
+    client->SetTimeout(timeout_s);
+    int fsm_id = 0;
+    const int32_t code = client->GetFsmId(fsm_id);
+    if (code != 0) {
+        return {code, std::nullopt};
+    }
+    return {code, fsm_id};
+}
+
 void UnitreeInterface::LowCommandWriter() {
     const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetData();
     if (!mc) {
@@ -568,6 +652,16 @@ PyLowState UnitreeInterface::ConvertToPyLowState() {
         py_state.motor.tau_est = ms->tau_est;
         py_state.motor.temperature = ms->temperature;
         py_state.motor.voltage = ms->voltage;
+        py_state.motor.ddq = ms->ddq;
+        py_state.motor.temperature_winding = ms->temperature_winding;
+        py_state.motor.motorstate = ms->motorstate;
+        py_state.motor.mode = ms->mode;
+        py_state.motor.sensor = ms->sensor;
+        py_state.motor.reserve = ms->reserve;
+        py_state.tick = ms->tick;
+        py_state.version = ms->version;
+        py_state.mode_pr = ms->mode_pr;
+        py_state.reserve = ms->reserve_message;
     }
     
     if (imu) {
@@ -575,6 +669,7 @@ PyLowState UnitreeInterface::ConvertToPyLowState() {
         py_state.imu.omega = imu->omega;
         py_state.imu.quat = imu->quat;
         py_state.imu.accel = imu->accel;
+        py_state.imu.temperature = imu->temperature;
     }
     
     py_state.mode_machine = mode_machine_;
@@ -744,6 +839,17 @@ void UnitreeInterface::PublishOdomState(const PyOdomState& odom) {
 void UnitreeInterface::PublishLowState(const PyLowState& state) {
     if (config_.message_type == MessageType::HG) {
         // HG message type
+        // Every per-motor list is indexed up to num_motors below; a SHORT list would read past its end, so it is
+        // rejected. A longer list is truncated to the motor count, as before this change (e.g. LowState(35) on a
+        // 29-motor G1 keeps working).
+        const size_t n = static_cast<size_t>(config_.num_motors);
+        const auto& m = state.motor;
+        if (m.q.size() < n || m.dq.size() < n || m.ddq.size() < n || m.tau_est.size() < n ||
+            m.temperature.size() < n || m.voltage.size() < n || m.temperature_winding.size() < n ||
+            m.motorstate.size() < n || m.mode.size() < n || m.sensor.size() < n || m.reserve.size() < n) {
+            throw std::invalid_argument("publish_low_state: every LowState.motor list needs at least " +
+                                        std::to_string(n) + " entries (the interface's motor count)");
+        }
         unitree_hg::msg::dds_::LowState_ dds_state;
         
         // Populate IMU state
@@ -751,6 +857,7 @@ void UnitreeInterface::PublishLowState(const PyLowState& state) {
         dds_state.imu_state().gyroscope(state.imu.omega);
         dds_state.imu_state().accelerometer(state.imu.accel);
         dds_state.imu_state().rpy(state.imu.rpy);
+        dds_state.imu_state().temperature(state.imu.temperature);
         
         // Populate motor state
         for (int i = 0; i < config_.num_motors; i++) {
@@ -759,12 +866,20 @@ void UnitreeInterface::PublishLowState(const PyLowState& state) {
             dds_state.motor_state().at(i).ddq(state.motor.ddq[i]);
             dds_state.motor_state().at(i).tau_est(state.motor.tau_est[i]);
             dds_state.motor_state().at(i).temperature()[0] = state.motor.temperature[i];
+            dds_state.motor_state().at(i).temperature()[1] = state.motor.temperature_winding[i];
             dds_state.motor_state().at(i).vol(state.motor.voltage[i]);
+            dds_state.motor_state().at(i).motorstate(state.motor.motorstate[i]);
+            dds_state.motor_state().at(i).mode(state.motor.mode[i]);
+            dds_state.motor_state().at(i).sensor(state.motor.sensor[i]);
+            dds_state.motor_state().at(i).reserve(state.motor.reserve[i]);
         }
         
         // Tick, mode and CRC
         dds_state.tick(state.tick);
         dds_state.mode_machine(state.mode_machine);
+        dds_state.version(state.version);
+        dds_state.mode_pr(state.mode_pr);
+        dds_state.reserve(state.reserve);
         dds_state.crc(Crc32Core((uint32_t*)&dds_state, (sizeof(dds_state) >> 2) - 1));
         
         // Publish
